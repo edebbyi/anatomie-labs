@@ -1,0 +1,319 @@
+import React, { useState } from 'react';
+import { User, Upload, BarChart3, Bell, Shield, LogOut, ChevronRight, TrendingUp } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import PortfolioModal from '../components/PortfolioModal';
+
+interface StyleCluster {
+  name: string;
+  count: number;
+}
+
+interface PortfolioStats {
+  portfolioCount: number;
+  garmentDistribution: Record<string, number>;
+  generatedImagesCount: number;
+  styleClusters: StyleCluster[];
+}
+
+const Settings: React.FC = () => {
+  const navigate = useNavigate();
+  const [profile, setProfile] = useState({
+    name: 'Jane Doe',
+    email: 'jane@example.com',
+    company: 'ANATOMIE',
+    portfolioSize: 0,
+  });
+  const [stats, setStats] = useState<PortfolioStats>({
+    portfolioCount: 0,
+    garmentDistribution: {},
+    generatedImagesCount: 0,
+    styleClusters: []
+  });
+  const [notifications, setNotifications] = useState({
+    email: true,
+    push: false,
+    genComplete: true,
+  });
+  const [showPortfolioModal, setShowPortfolioModal] = useState(false);
+
+  // Fetch portfolio stats from API
+  React.useEffect(() => {
+    const fetchPortfolioStats = async () => {
+      try {
+        const userProfile = localStorage.getItem('userProfile');
+        let userId = 'ec058a8c-b2d7-4888-9e66-b7b02e393152';
+        
+        if (userProfile) {
+          try {
+            const profile = JSON.parse(userProfile);
+            userId = profile.userId || userId;
+          } catch (e) {
+            console.error('Failed to parse userProfile', e);
+          }
+        }
+        
+        const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
+        const response = await fetch(`${API_URL}/persona/stats/${userId}`);
+        
+        if (response.ok) {
+          const data = await response.json();
+          setStats(data.data);
+          setProfile(prev => ({
+            ...prev,
+            portfolioSize: data.data.portfolioCount
+          }));
+        }
+      } catch (error) {
+        console.error('Error fetching portfolio stats:', error);
+      }
+    };
+
+    fetchPortfolioStats();
+  }, []);
+
+  const settingsSections = [
+    {
+      title: 'Profile',
+      icon: User,
+      items: [
+        { label: 'Name', value: profile.name, action: 'edit' },
+        { label: 'Email', value: profile.email, action: 'edit' },
+        { label: 'Company', value: profile.company, action: 'edit' },
+      ],
+    },
+    {
+      title: 'Portfolio',
+      icon: Upload,
+      items: [
+        { label: 'Current Portfolio', value: `${profile.portfolioSize} images`, action: 'view' },
+        { label: 'Re-upload Portfolio', value: 'Update your style profile', action: 'upload' },
+      ],
+    },
+    {
+      title: 'Notifications',
+      icon: Bell,
+      items: [
+        { label: 'Email Notifications', value: notifications.email ? 'Enabled' : 'Disabled', action: 'toggle' },
+        { label: 'Push Notifications', value: notifications.push ? 'Enabled' : 'Disabled', action: 'toggle' },
+        { label: 'Generation Complete', value: notifications.genComplete ? 'Enabled' : 'Disabled', action: 'toggle' },
+      ],
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-4xl font-bold font-display text-podna-gray-900">Settings</h1>
+        <p className="text-lg text-podna-gray-600 mt-2">
+          Manage your account and preferences
+        </p>
+      </div>
+
+      {/* Profile Card */}
+      <div className="bg-gradient-to-br from-podna-primary-500 to-podna-primary-600 rounded-2xl p-8 text-white shadow-airbnb-card">
+        <div className="flex items-center space-x-4 mb-6">
+          <div className="h-20 w-20 bg-white/20 rounded-full flex items-center justify-center text-3xl font-bold backdrop-blur-sm">
+            {profile.name.charAt(0)}
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold font-display">{profile.name}</h2>
+            <p className="text-podna-primary-100">{profile.email}</p>
+            <p className="text-podna-primary-200 text-sm mt-1">{profile.company}</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-4">
+          <div className="bg-white/15 rounded-xl p-4 backdrop-blur-md border border-white/20">
+            <p className="text-sm text-podna-primary-100 font-medium">Portfolio</p>
+            <p className="text-2xl font-bold font-display">{stats.portfolioCount} items</p>
+          </div>
+          <div className="bg-white/15 rounded-xl p-4 backdrop-blur-md border border-white/20">
+            <p className="text-sm text-podna-primary-100 font-medium">Generated</p>
+            <p className="text-2xl font-bold font-display">{stats.generatedImagesCount} designs</p>
+          </div>
+          <div className="bg-white/15 rounded-xl p-4 backdrop-blur-md border border-white/20">
+            <p className="text-sm text-podna-primary-100 font-medium">Member Since</p>
+            <p className="text-2xl font-bold font-display">2025</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Style Clusters */}
+      {stats.styleClusters.length > 0 && (
+        <div className="bg-white rounded-xl shadow-airbnb-card overflow-hidden border border-podna-gray-100">
+          <div className="px-6 py-4 border-b border-podna-gray-100 flex items-center space-x-3">
+            <TrendingUp className="h-5 w-5 text-podna-primary-500" />
+            <h3 className="text-lg font-semibold font-display text-podna-gray-900">Your Style Clusters</h3>
+          </div>
+          <div className="p-6">
+            <p className="text-sm text-gray-600 mb-4">
+              Based on your portfolio analysis, these are your dominant style profiles:
+            </p>
+            <div className="space-y-3">
+              {stats.styleClusters.map((cluster, idx) => (
+                <div key={idx} className="flex items-center justify-between">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-2 h-2 rounded-full bg-podna-primary-500"></div>
+                    <span className="text-sm font-medium text-gray-900 capitalize">{cluster.name}</span>
+                  </div>
+                  <span className="text-sm text-gray-500">{cluster.count} items</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Garment Distribution */}
+      {Object.keys(stats.garmentDistribution).length > 0 && (
+        <div className="bg-white rounded-xl shadow-airbnb-card overflow-hidden border border-podna-gray-100">
+          <div className="px-6 py-4 border-b border-podna-gray-100 flex items-center space-x-3">
+            <BarChart3 className="h-5 w-5 text-podna-primary-500" />
+            <h3 className="text-lg font-semibold font-display text-podna-gray-900">Garment Type Coverage</h3>
+          </div>
+          <div className="p-6">
+            <div className="space-y-3">
+              {Object.entries(stats.garmentDistribution)
+                .sort(([,a], [,b]) => (b as number) - (a as number))
+                .slice(0, 10)
+                .map(([type, count]) => (
+                  <div key={type} className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-gray-900 capitalize">{type}</span>
+                    <div className="flex items-center space-x-3">
+                      <div className="w-32 bg-gray-200 rounded-full h-2">
+                        <div 
+                          className="bg-podna-primary-500 h-2 rounded-full" 
+                          style={{ width: `${Math.min(100, ((count as number) / stats.portfolioCount) * 100)}%` }}
+                        ></div>
+                      </div>
+                      <span className="text-sm text-gray-500 w-8 text-right">{count}</span>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings Sections */}
+      {settingsSections.map((section) => {
+        const Icon = section.icon;
+        return (
+          <div key={section.title} className="bg-white rounded-xl shadow-sm overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center space-x-3">
+              <Icon className="h-5 w-5 text-anatomie-accent" />
+              <h3 className="text-lg font-semibold text-gray-900">{section.title}</h3>
+            </div>
+            <div className="divide-y divide-gray-200">
+              {section.items.map((item) => (
+                <button
+                  key={item.label}
+                  onClick={() => {
+                    if (item.action === 'view') {
+                      setShowPortfolioModal(true);
+                    } else if (item.action === 'upload') {
+                      // Navigate to re-upload flow
+                      alert('Re-upload portfolio coming soon!');
+                    }
+                  }}
+                  className="w-full px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors text-left"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">{item.label}</p>
+                    <p className="text-sm text-gray-500 mt-0.5">{item.value}</p>
+                  </div>
+                  <ChevronRight className="h-5 w-5 text-gray-400" />
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Advanced Options (for dev team) */}
+      <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200 flex items-center space-x-3">
+          <BarChart3 className="h-5 w-5 text-anatomie-accent" />
+          <h3 className="text-lg font-semibold text-gray-900">Advanced</h3>
+          <span className="ml-auto px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded-full">Dev Team</span>
+        </div>
+        <div className="divide-y divide-gray-200">
+          <button
+            onClick={() => navigate('/analytics')}
+            className="w-full px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors text-left"
+          >
+            <div>
+              <p className="text-sm font-medium text-gray-900">Analytics Dashboard</p>
+              <p className="text-sm text-gray-500 mt-0.5">View detailed generation metrics</p>
+            </div>
+            <ChevronRight className="h-5 w-5 text-gray-400" />
+          </button>
+          <button
+            onClick={() => navigate('/coverage')}
+            className="w-full px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors text-left"
+          >
+            <div>
+              <p className="text-sm font-medium text-gray-900">Coverage Analysis</p>
+              <p className="text-sm text-gray-500 mt-0.5">Review style gaps and suggestions</p>
+            </div>
+            <ChevronRight className="h-5 w-5 text-gray-400" />
+          </button>
+          <button
+            onClick={() => navigate('/feedback')}
+            className="w-full px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors text-left"
+          >
+            <div>
+              <p className="text-sm font-medium text-gray-900">RLHF Feedback</p>
+              <p className="text-sm text-gray-500 mt-0.5">Train the AI with your preferences</p>
+            </div>
+            <ChevronRight className="h-5 w-5 text-gray-400" />
+          </button>
+        </div>
+      </div>
+
+      {/* Privacy & Security */}
+      <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200 flex items-center space-x-3">
+          <Shield className="h-5 w-5 text-anatomie-accent" />
+          <h3 className="text-lg font-semibold text-gray-900">Privacy & Security</h3>
+        </div>
+        <div className="divide-y divide-gray-200">
+          <button className="w-full px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors text-left">
+            <div>
+              <p className="text-sm font-medium text-gray-900">Data Privacy</p>
+              <p className="text-sm text-gray-500 mt-0.5">Manage your data preferences</p>
+            </div>
+            <ChevronRight className="h-5 w-5 text-gray-400" />
+          </button>
+          <button className="w-full px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors text-left">
+            <div>
+              <p className="text-sm font-medium text-gray-900">Change Password</p>
+              <p className="text-sm text-gray-500 mt-0.5">Update your password</p>
+            </div>
+            <ChevronRight className="h-5 w-5 text-gray-400" />
+          </button>
+        </div>
+      </div>
+
+      {/* Sign Out */}
+      <button
+        onClick={() => {
+          localStorage.clear();
+          navigate('/onboarding');
+        }}
+        className="w-full bg-white rounded-xl shadow-airbnb px-6 py-4 flex items-center justify-center space-x-2 text-podna-accent-600 hover:bg-podna-accent-50 transition-colors border border-podna-gray-200"
+      >
+        <LogOut className="h-5 w-5" />
+        <span className="font-medium">Sign Out</span>
+      </button>
+      
+      {/* Portfolio Modal */}
+      <PortfolioModal 
+        isOpen={showPortfolioModal} 
+        onClose={() => setShowPortfolioModal(false)} 
+      />
+    </div>
+  );
+};
+
+export default Settings;

@@ -1,0 +1,569 @@
+import React, { useState, useEffect } from 'react';
+import { X, Plus, Sparkles, Check, Loader } from 'lucide-react';
+import axios from 'axios';
+
+interface StyleAttribute {
+  category: string;
+  tags: string[];
+}
+
+interface StyleProfileData {
+  garmentAttributes: string[];
+  technicalAttributes: string[];
+  visualAttributes: string[];
+  dominantColors: string[];
+  preferredSilhouettes: string[];
+}
+
+const StyleProfile: React.FC = () => {
+  const [profile, setProfile] = useState<StyleProfileData>({
+    garmentAttributes: [],
+    technicalAttributes: [],
+    visualAttributes: [],
+    dominantColors: [],
+    preferredSilhouettes: [],
+  });
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [newTag, setNewTag] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<keyof StyleProfileData>('garmentAttributes');
+  const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  
+  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+
+  useEffect(() => {
+    loadUserProfile();
+  }, []);
+
+  useEffect(() => {
+    // Load AI suggestions based on current profile
+    if (!loading) {
+      loadAISuggestions();
+    }
+  }, [profile, loading]);
+
+  const loadUserProfile = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      setDebugInfo(null);
+      
+      const currentUser = localStorage.getItem('currentUser');
+      console.log('Raw currentUser from localStorage:', currentUser);
+      
+      const userId = currentUser ? JSON.parse(currentUser).id : null;
+      console.log('Extracted userId:', userId);
+      
+      if (!userId) {
+        const errorMsg = 'No user ID found in localStorage';
+        setError(errorMsg);
+        setDebugInfo({ currentUser, userId });
+        console.warn(errorMsg);
+        setLoading(false);
+        return;
+      }
+
+      console.log('Loading style profile for user:', userId);
+
+      // Load style clustering profile with enhanced debugging
+      let styleProfile = null;
+      console.log('Calling style clustering API:', `${API_URL}/style-clustering/profile/${userId}`);
+      
+      try {
+        const styleResponse = await axios.get(`${API_URL}/style-clustering/profile/${userId}`, {
+          timeout: 10000,
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        console.log('Style clustering response:', {
+          status: styleResponse.status,
+          success: styleResponse.data.success,
+          hasData: !!styleResponse.data.data,
+          dataKeys: styleResponse.data.data ? Object.keys(styleResponse.data.data) : null
+        });
+        
+        if (styleResponse.data.success && styleResponse.data.data) {
+          styleProfile = styleResponse.data.data;
+          console.log('Style profile loaded successfully:', styleProfile);
+        } else {
+          console.warn('Style clustering API returned success=false:', styleResponse.data);
+          setError(`Style clustering failed: ${styleResponse.data.message || 'Unknown error'}`);
+          setDebugInfo({ apiResponse: styleResponse.data });
+        }
+      } catch (error: any) {
+        console.error('Style clustering API error:', {
+          status: error.response?.status,
+          data: error.response?.data,
+          message: error.message,
+          code: error.code
+        });
+        
+        if (error.response?.status === 404) {
+          console.log('No style profile found for user (404)');
+          setError('Style profile not found - you may need to complete onboarding first');
+        } else if (error.code === 'ECONNREFUSED') {
+          setError('Backend service is not running');
+        } else if (error.code === 'ENOTFOUND') {
+          setError('Cannot connect to API server');
+        } else {
+          setError(`Style clustering API error: ${error.response?.data?.message || error.message}`);
+        }
+        
+        setDebugInfo({
+          errorCode: error.code,
+          errorStatus: error.response?.status,
+          errorData: error.response?.data,
+          apiUrl: `${API_URL}/style-clustering/profile/${userId}`
+        });
+      }
+
+      // Load portfolio summary from images
+      let portfolioSummary = null;
+      try {
+        const imagesResponse = await axios.get(`${API_URL}/images`, {
+          params: { userId, limit: 100 }
+        });
+        
+        if (imagesResponse.data.success && imagesResponse.data.images) {
+          portfolioSummary = extractPortfolioData(imagesResponse.data.images);
+          console.log('Portfolio summary extracted:', portfolioSummary);
+          
+          // Store in localStorage for other pages
+          localStorage.setItem('portfolioSummary', JSON.stringify(portfolioSummary));
+        }
+      } catch (error) {
+        console.error('Failed to load images:', error);
+      }
+
+      // Build profile from both sources
+      const newProfile: StyleProfileData = {
+        garmentAttributes: [],
+        technicalAttributes: [],
+        visualAttributes: [],
+        dominantColors: [],
+        preferredSilhouettes: []
+      };
+
+      // Extract from style clustering profile
+      if (styleProfile) {
+        // Get insights from style profile
+        if (styleProfile.insights) {
+          if (styleProfile.insights.dominantStyle) {
+            newProfile.garmentAttributes.push(styleProfile.insights.dominantStyle);
+          }
+          if (styleProfile.insights.recommendedStyles) {
+            newProfile.garmentAttributes.push(...styleProfile.insights.recommendedStyles.slice(0, 3));
+          }
+        }
+
+        // Get attributes from clusters
+        if (styleProfile.styleClusters || styleProfile.clusters) {
+          const clusters = styleProfile.styleClusters || styleProfile.clusters;
+          clusters.forEach((cluster: any) => {
+            if (cluster.dominantGarmentType) {
+              newProfile.garmentAttributes.push(cluster.dominantGarmentType);
+            }
+            if (cluster.aesthetic) {
+              newProfile.visualAttributes.push(cluster.aesthetic);
+            }
+          });
+        }
+      }
+
+      // Extract from portfolio summary
+      if (portfolioSummary) {
+        // Garment types
+        if (portfolioSummary.garmentTypeDistribution) {
+          portfolioSummary.garmentTypeDistribution.forEach((item: any) => {
+            if (item.type && !newProfile.garmentAttributes.includes(item.type)) {
+              newProfile.garmentAttributes.push(item.type);
+            }
+          });
+        }
+
+        // Colors
+        if (portfolioSummary.dominantColors) {
+          newProfile.dominantColors = portfolioSummary.dominantColors.slice(0, 8);
+        }
+
+        // Silhouettes
+        if (portfolioSummary.silhouettes) {
+          newProfile.preferredSilhouettes = portfolioSummary.silhouettes.slice(0, 6);
+        }
+
+        // Visual attributes
+        if (portfolioSummary.dominantAesthetic) {
+          if (!newProfile.visualAttributes.includes(portfolioSummary.dominantAesthetic)) {
+            newProfile.visualAttributes.push(portfolioSummary.dominantAesthetic);
+          }
+        }
+      }
+
+      // Remove duplicates
+      Object.keys(newProfile).forEach((key) => {
+        newProfile[key as keyof StyleProfileData] = Array.from(new Set(newProfile[key as keyof StyleProfileData]));
+      });
+
+      console.log('Final profile constructed:', newProfile);
+      setProfile(newProfile);
+
+    } catch (error: any) {
+      console.error('Failed to load user profile:', error);
+      setError(`Failed to load profile: ${error.message}`);
+      setDebugInfo({ error: error.message, stack: error.stack });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const extractPortfolioData = (images: any[]) => {
+    const garmentTypes: { [key: string]: number } = {};
+    const colors: string[] = [];
+    const silhouettes: string[] = [];
+    let aesthetic = '';
+
+    images.forEach((image) => {
+      const vlt = image.vlt_analysis;
+      if (!vlt) return;
+
+      // Extract garment type
+      if (vlt.garment_type) {
+        garmentTypes[vlt.garment_type] = (garmentTypes[vlt.garment_type] || 0) + 1;
+      }
+
+      // Extract colors
+      if (vlt.color_palette) {
+        if (Array.isArray(vlt.color_palette)) {
+          colors.push(...vlt.color_palette.map((c: any) => c.name || c));
+        } else if (vlt.color_palette.dominant) {
+          colors.push(vlt.color_palette.dominant);
+        }
+      }
+
+      // Extract silhouettes
+      if (vlt.silhouette) {
+        silhouettes.push(vlt.silhouette);
+      }
+
+      // Extract aesthetic
+      if (vlt.style?.aesthetic && !aesthetic) {
+        aesthetic = vlt.style.aesthetic;
+      } else if (vlt.aesthetic && !aesthetic) {
+        aesthetic = vlt.aesthetic;
+      }
+    });
+
+    // Get top garment types
+    const garmentTypeDistribution = Object.entries(garmentTypes)
+      .map(([type, count]) => ({ type, count }))
+      .sort((a, b) => b.count - a.count);
+
+    // Get unique colors (top 8)
+    const uniqueColors = Array.from(new Set(colors)).slice(0, 8);
+
+    // Get unique silhouettes (top 6)
+    const uniqueSilhouettes = Array.from(new Set(silhouettes)).slice(0, 6);
+
+    return {
+      garmentTypeDistribution,
+      dominantColors: uniqueColors,
+      silhouettes: uniqueSilhouettes,
+      dominantAesthetic: aesthetic,
+      totalImages: images.length
+    };
+  };
+
+  const loadAISuggestions = () => {
+    // Mock AI suggestions - in production, this would come from your ML model
+    const mockSuggestions = [
+      'contemporary',
+      'sophisticated',
+      'tailored',
+      'flowing',
+      'structured',
+      'oversized',
+      'fitted',
+      'asymmetric',
+    ];
+    setAiSuggestions(mockSuggestions.slice(0, 6));
+  };
+
+  const removeTag = (category: keyof StyleProfileData, tag: string) => {
+    setProfile({
+      ...profile,
+      [category]: profile[category].filter(t => t !== tag),
+    });
+  };
+
+  const addTag = (category: keyof StyleProfileData, tag: string) => {
+    if (!profile[category].includes(tag) && tag.trim()) {
+      setProfile({
+        ...profile,
+        [category]: [...profile[category], tag.trim().toLowerCase()],
+      });
+    }
+    setNewTag('');
+  };
+
+  const acceptSuggestion = (tag: string) => {
+    addTag(selectedCategory, tag);
+    setAiSuggestions(aiSuggestions.filter(s => s !== tag));
+  };
+
+  const categories: { key: keyof StyleProfileData; label: string; description: string }[] = [
+    {
+      key: 'garmentAttributes',
+      label: 'Garment Attributes',
+      description: 'Types, styles, and overall aesthetic',
+    },
+    {
+      key: 'technicalAttributes',
+      label: 'Technical Attributes',
+      description: 'Lighting, angles, and photography details',
+    },
+    {
+      key: 'visualAttributes',
+      label: 'Visual Attributes',
+      description: 'Texture, drape, and visual qualities',
+    },
+    {
+      key: 'dominantColors',
+      label: 'Color Palette',
+      description: 'Preferred colors and tones',
+    },
+    {
+      key: 'preferredSilhouettes',
+      label: 'Silhouettes',
+      description: 'Preferred shapes and cuts',
+    },
+  ];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <Loader className="h-12 w-12 text-anatomie-accent animate-spin mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">Loading Your Style Profile</h2>
+          <p className="text-gray-600">Analyzing your portfolio...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold text-gray-900">Your Style Profile</h1>
+        <p className="text-sm text-gray-600 mt-2">
+          Based on your portfolio analysis. Edit to refine AI generations.
+        </p>
+      </div>
+
+      {/* Error Display */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-6">
+          <h3 className="text-lg font-semibold text-red-800 mb-2">Debug Information</h3>
+          <p className="text-red-600 mb-4">{error}</p>
+          {debugInfo && (
+            <div className="mt-4">
+              <h4 className="font-semibold text-red-700 mb-2">Technical Details:</h4>
+              <pre className="bg-red-100 p-4 rounded text-sm overflow-auto text-red-800">
+                {JSON.stringify(debugInfo, null, 2)}
+              </pre>
+            </div>
+          )}
+          <button 
+            onClick={loadUserProfile}
+            className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+          >
+            Retry Loading Profile
+          </button>
+        </div>
+      )}
+
+      {/* Enhanced Empty State */}
+      {!loading && !error && Object.values(profile).every(arr => arr.length === 0) && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-8 text-center">
+          <div className="text-6xl mb-4">🎨</div>
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">No Style Profile Data</h2>
+          <p className="text-gray-600 mb-4">
+            We couldn't load your style profile. This could happen if:
+          </p>
+          <ul className="text-left text-sm text-gray-600 mb-6 max-w-md mx-auto">
+            <li>• You haven't completed onboarding yet</li>
+            <li>• VLT analysis failed during onboarding</li>
+            <li>• Style clustering service is down</li>
+            <li>• Your portfolio images couldn't be analyzed</li>
+          </ul>
+          <button 
+            onClick={loadUserProfile}
+            className="px-6 py-2 bg-anatomie-accent text-white rounded-lg hover:bg-indigo-700 transition-colors"
+          >
+            Retry Loading Profile
+          </button>
+        </div>
+      )}
+
+      {/* Profile Overview Card */}
+      <div className="bg-gradient-to-br from-anatomie-accent to-indigo-600 rounded-2xl p-8 text-white">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-2xl font-bold">Style DNA</h2>
+            <p className="text-indigo-100 mt-1">
+              {profile.garmentAttributes.length + 
+               profile.technicalAttributes.length + 
+               profile.visualAttributes.length} attributes learned
+            </p>
+          </div>
+          <div className="p-4 bg-white/10 rounded-xl backdrop-blur-sm">
+            <Sparkles className="h-8 w-8" />
+          </div>
+        </div>
+        
+        {/* Quick Stats */}
+        <div className="grid grid-cols-3 gap-4">
+          <div className="bg-white/10 rounded-lg p-4 backdrop-blur-sm">
+            <p className="text-sm text-indigo-100">Garments</p>
+            <p className="text-2xl font-bold">{profile.garmentAttributes.length}</p>
+          </div>
+          <div className="bg-white/10 rounded-lg p-4 backdrop-blur-sm">
+            <p className="text-sm text-indigo-100">Colors</p>
+            <p className="text-2xl font-bold">{profile.dominantColors.length}</p>
+          </div>
+          <div className="bg-white/10 rounded-lg p-4 backdrop-blur-sm">
+            <p className="text-sm text-indigo-100">Silhouettes</p>
+            <p className="text-2xl font-bold">{profile.preferredSilhouettes.length}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* AI Suggestions */}
+      {showSuggestions && aiSuggestions.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border-2 border-anatomie-accent p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center space-x-2">
+              <Sparkles className="h-5 w-5 text-anatomie-accent" />
+              <h3 className="text-lg font-semibold text-gray-900">AI Suggestions</h3>
+            </div>
+            <button
+              onClick={() => setShowSuggestions(false)}
+              className="text-gray-400 hover:text-gray-600"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          <p className="text-sm text-gray-600 mb-4">
+            Based on your portfolio, we think these tags might match your style:
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {aiSuggestions.map((suggestion) => (
+              <button
+                key={suggestion}
+                onClick={() => acceptSuggestion(suggestion)}
+                className="px-4 py-2 bg-anatomie-accent/10 hover:bg-anatomie-accent/20 text-anatomie-accent rounded-full text-sm font-medium transition-all flex items-center space-x-2"
+              >
+                <span>{suggestion}</span>
+                <Plus className="h-3 w-3" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!showSuggestions && (
+        <button
+          onClick={() => setShowSuggestions(true)}
+          className="w-full py-3 bg-white rounded-xl shadow-sm border border-gray-200 hover:border-anatomie-accent text-gray-700 hover:text-anatomie-accent transition-all flex items-center justify-center space-x-2"
+        >
+          <Sparkles className="h-4 w-4" />
+          <span className="text-sm font-medium">Show AI Suggestions</span>
+        </button>
+      )}
+
+      {/* Style Categories */}
+      {categories.map((category) => (
+        <div key={category.key} className="bg-white rounded-xl shadow-sm p-6">
+          <div className="mb-4">
+            <h3 className="text-lg font-semibold text-gray-900">{category.label}</h3>
+            <p className="text-sm text-gray-500">{category.description}</p>
+          </div>
+
+          {/* Tags */}
+          <div className="flex flex-wrap gap-2 mb-4">
+            {profile[category.key].map((tag) => (
+              <div
+                key={tag}
+                className="group inline-flex items-center space-x-2 px-4 py-2 bg-gray-100 hover:bg-red-50 rounded-full transition-all"
+              >
+                <span className="text-sm font-medium text-gray-700 group-hover:text-red-600">
+                  {tag}
+                </span>
+                <button
+                  onClick={() => removeTag(category.key, tag)}
+                  className="p-0.5 rounded-full hover:bg-red-100 text-gray-400 group-hover:text-red-600 transition-all"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+            {profile[category.key].length === 0 && (
+              <p className="text-sm text-gray-400 italic">No tags yet. Add some below!</p>
+            )}
+          </div>
+
+          {/* Add New Tag */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              addTag(category.key, newTag);
+            }}
+            className="flex items-center space-x-2"
+          >
+            <input
+              type="text"
+              value={selectedCategory === category.key ? newTag : ''}
+              onChange={(e) => {
+                setSelectedCategory(category.key);
+                setNewTag(e.target.value);
+              }}
+              onFocus={() => setSelectedCategory(category.key)}
+              placeholder="Add a new tag..."
+              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-anatomie-accent focus:border-transparent text-sm"
+            />
+            <button
+              type="submit"
+              disabled={!newTag.trim() || selectedCategory !== category.key}
+              className="px-4 py-2 bg-anatomie-accent text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center space-x-2"
+            >
+              <Plus className="h-4 w-4" />
+              <span className="text-sm font-medium">Add</span>
+            </button>
+          </form>
+        </div>
+      ))}
+
+      {/* Save Button */}
+      <div className="flex items-center justify-end space-x-4 pt-4">
+        <button
+          onClick={() => {
+            // In production, save to backend
+            localStorage.setItem('styleProfile', JSON.stringify(profile));
+            alert('Style profile saved!');
+          }}
+          className="px-6 py-3 bg-anatomie-accent text-white rounded-lg hover:bg-indigo-700 transition-all flex items-center space-x-2 shadow-lg"
+        >
+          <Check className="h-5 w-5" />
+          <span className="font-medium">Save Profile</span>
+        </button>
+      </div>
+    </div>
+  );
+};
+
+export default StyleProfile;

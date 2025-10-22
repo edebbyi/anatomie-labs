@@ -1,0 +1,945 @@
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Sparkles, CheckCircle, Loader, FileArchive, AlertCircle } from 'lucide-react';
+import onboardingAPI, { VLTAnalysisResult } from '../services/onboardingAPI';
+import authAPI from '../services/authAPI';
+
+interface OnboardingStep {
+  step: number;
+  title: string;
+  description: string;
+}
+
+const steps: OnboardingStep[] = [
+  { step: 1, title: 'Create Account', description: 'Tell us about yourself' },
+  { step: 2, title: 'Upload Portfolio', description: 'Upload ZIP file with 50-500 images' },
+  { step: 3, title: 'Processing', description: 'Analyzing your style with VLT' },
+  { step: 4, title: 'Initial Generation', description: 'Generating your first 100 images' },
+];
+
+const Onboarding: React.FC = () => {
+  const navigate = useNavigate();
+  const [currentStep, setCurrentStep] = useState(1);
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    company: '',
+    role: 'designer',
+  });
+  const [userId, setUserId] = useState<string | null>(null);
+  const [uploadedZip, setUploadedZip] = useState<File | null>(null);
+  const [imageCount, setImageCount] = useState(0);
+  const [actualImageCount, setActualImageCount] = useState<number | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState(0);
+  const [processingMessage, setProcessingMessage] = useState('');
+  const [currentImage, setCurrentImage] = useState<number | null>(null);
+  const [totalImages, setTotalImages] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [vltResult, setVltResult] = useState<VLTAnalysisResult | null>(null);
+  const [previewImages, setPreviewImages] = useState<Array<{id: string, url: string}>>([]);
+  const [processedImages, setProcessedImages] = useState<Array<{id: string, url: string, tags: string[]}>>([]);
+  const [floatingTags, setFloatingTags] = useState<Array<{id: string, tag: string, x: number, y: number, color: string}>>([]);
+
+  // Initialize user data on mount
+  useEffect(() => {
+    const currentUser = authAPI.getCurrentUser();
+    if (currentUser) {
+      // User is authenticated, pre-fill form and get user ID
+      setFormData({
+        name: currentUser.name || '',
+        email: currentUser.email || '',
+        company: '',
+        role: 'designer',
+      });
+      setUserId(currentUser.id);
+      // Skip to step 2 if authenticated
+      setCurrentStep(2);
+    } else {
+      // Not authenticated, redirect to signup
+      navigate('/signup');
+    }
+  }, [navigate]);
+
+  // Process actual VLT analysis progress data
+  // Note: Mock images removed - will use actual image data from backend when available
+  useEffect(() => {
+    if (currentStep === 3 && isProcessing && currentImage && totalImages) {
+      // In a future enhancement, backend can send actual image thumbnails
+      // For now, we'll show the analysis progress without mock Unsplash images
+      
+      // If backend sends image data in progress updates, it would be used here
+      // Example: data?.imageUrl would come from onProgress callback
+    }
+  }, [currentStep, isProcessing, currentImage, totalImages]);
+
+  // Step 1: Account Creation (now handled by Signup page)
+  const handleAccountSubmit = () => {
+    if (formData.name && formData.email) {
+      setCurrentStep(2);
+    }
+  };
+
+  // Step 2: Portfolio Upload
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.name.endsWith('.zip')) {
+      alert('Please upload a ZIP file containing your images');
+      return;
+    }
+
+    // Validate file size (max 500MB)
+    const maxSize = 500 * 1024 * 1024; // 500MB
+    if (file.size > maxSize) {
+      alert('ZIP file must be less than 500MB');
+      return;
+    }
+
+    setUploadedZip(file);
+    // More realistic estimate: ~700KB per compressed image in a ZIP
+    // This accounts for JPEG compression + ZIP compression
+    const estimatedCount = Math.floor(file.size / (700 * 1024));
+    setImageCount(estimatedCount);
+    setActualImageCount(null); // Reset actual count
+  };
+
+  const handleZipUpload = async () => {
+    if (!uploadedZip) {
+      alert('Please upload a ZIP file');
+      return;
+    }
+    
+    // Use actual count if provided, otherwise use estimate
+    const countToUse = actualImageCount !== null ? actualImageCount : imageCount;
+    
+    // Warn but allow proceeding if estimate is low
+    if (countToUse < 50 && actualImageCount === null) {
+      const confirmed = window.confirm(
+        `The ZIP file appears to contain ~${imageCount} images based on its size.\n\n` +
+        `If you know it contains 50+ images, click OK to proceed.\n` +
+        `Otherwise, click Cancel and upload a larger ZIP file.`
+      );
+      if (!confirmed) return;
+    }
+    
+    if (countToUse > 500) {
+      alert('Too many images. Please ensure ZIP contains maximum 500 images.');
+      return;
+    }
+    
+    setCurrentStep(3);
+    setIsProcessing(true);
+    setError(null);
+    
+    try {
+      // Call real backend API
+      setProcessingMessage('Uploading ZIP file...');
+      setProcessingProgress(10);
+      
+      const result = await onboardingAPI.processPortfolio(
+        uploadedZip,
+        formData,
+        {
+          model: 'gemini',
+          passes: 'A,B,C',
+          onProgress: (progress, message, data) => {
+            setProcessingProgress(progress);
+            setProcessingMessage(message);
+            if (data?.currentImage) setCurrentImage(data.currentImage);
+            if (data?.totalImages) setTotalImages(data.totalImages);
+          },
+        }
+      );
+      
+      setVltResult(result);
+      setProcessingProgress(100);
+      setProcessingMessage('Analysis complete!');
+      
+      // Save to database using authenticated user ID
+      if (!userId) {
+        throw new Error('User not authenticated. Please sign up first.');
+      }
+      
+      setProcessingMessage('Saving to database...');
+      try {
+        await onboardingAPI.saveStyleProfile(userId, result);
+        console.log('Portfolio saved to database successfully');
+      } catch (error) {
+        console.error('Failed to save portfolio to database:', error);
+        throw new Error('Failed to save portfolio. Please try again.');
+      }
+      
+      // Save to localStorage as backup
+      localStorage.setItem('userProfile', JSON.stringify({
+        ...formData,
+        portfolioSize: result.records.length,
+        zipFileName: uploadedZip.name,
+        onboardingComplete: true,
+        vltAnalysis: result.summary,
+        timestamp: new Date().toISOString(),
+        userId: userId,
+      }));
+      
+      // Step 4: Generate initial images
+      setCurrentStep(4);
+      setProcessingProgress(0);
+      setProcessingMessage('Starting image generation...');
+      
+      try {
+        const genResult = await onboardingAPI.generateInitialImages(userId, {
+          targetCount: 20, // 10 prompts × 2 images each = 20 total
+          provider: 'google-imagen', // or 'stable-diffusion-xl' for faster/cheaper
+          onProgress: (progress, message, stats) => {
+            setProcessingProgress(progress);
+            setProcessingMessage(message);
+            
+            // Update preview images if available (REAL generated images!)
+            if (stats && stats.previewImages && Array.isArray(stats.previewImages)) {
+              // Filter out any potential mock/placeholder images
+              const realImages = stats.previewImages.filter((img: any) => 
+                img && img.url && !img.url.includes('placeholder') && !img.url.includes('unsplash')
+              );
+              if (realImages.length > 0) {
+                setPreviewImages(realImages);
+              }
+            }
+            
+            // Log stats if available
+            if (stats) {
+              console.log('Generation stats:', stats);
+            }
+          },
+        });
+        
+        console.log('Image generation complete:', genResult);
+        
+        setProcessingProgress(100);
+        setProcessingMessage(`Generated ${genResult.totalGenerated} images! 🎉`);
+        
+        // Small delay to show completion
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        
+        // Navigate to home gallery
+        navigate('/home');
+        
+      } catch (genError: any) {
+        console.error('Image generation error:', genError);
+        setError(`Generation warning: ${genError.message}. You can view your portfolio anyway.`);
+        
+        // Still allow navigation after 2 seconds
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        navigate('/home');
+      }
+      
+    } catch (error: any) {
+      console.error('Processing error:', error);
+      
+      // Check if it's a timeout error
+      if (error.message.includes('timed out')) {
+        setError(
+          error.message + 
+          '\n\nWould you like to: \n1) Retry with a smaller ZIP file\n2) Skip analysis and use demo data'
+        );
+      } else {
+        setError(error.message || 'Failed to process portfolio. Please try again.');
+      }
+      
+      setIsProcessing(false);
+      setCurrentStep(2); // Go back to upload step
+    }
+  };
+
+
+  return (
+    <div>
+      {/* Custom Animations */}
+      <style>{`
+        @keyframes float {
+          0%, 100% { transform: translateY(0px) rotate(0deg); opacity: 1; }
+          50% { transform: translateY(-20px) rotate(5deg); opacity: 0.8; }
+        }
+        
+        @keyframes fadeOut {
+          0% { opacity: 1; }
+          100% { opacity: 0; }
+        }
+        
+        @keyframes fadeInUp {
+          0% { opacity: 0; transform: translateY(20px); }
+          100% { opacity: 1; transform: translateY(0); }
+        }
+        
+        @keyframes slideInUp {
+          0% { opacity: 0; transform: translateY(30px) scale(0.9); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+      `}</style>
+      
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center p-4">
+      <div className="max-w-4xl w-full">
+        {/* Progress Steps */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between">
+            {steps.map((s, idx) => (
+              <div key={s.step} className="flex-1">
+                <div className="flex items-center">
+                  <div
+                    className={`
+                      w-10 h-10 rounded-full flex items-center justify-center font-semibold
+                      ${currentStep > s.step ? 'bg-green-500 text-white' : ''}
+                      ${currentStep === s.step ? 'bg-anatomie-accent text-white' : ''}
+                      ${currentStep < s.step ? 'bg-gray-300 text-gray-500' : ''}
+                    `}
+                  >
+                    {currentStep > s.step ? <CheckCircle className="h-5 w-5" /> : s.step}
+                  </div>
+                  {idx < steps.length - 1 && (
+                    <div
+                      className={`flex-1 h-1 mx-2 ${
+                        currentStep > s.step ? 'bg-green-500' : 'bg-gray-300'
+                      }`}
+                    />
+                  )}
+                </div>
+                <p className="text-xs mt-2 text-gray-600 text-center">{s.title}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Step Content */}
+        <div className="bg-white rounded-2xl shadow-xl p-8">
+          {/* Step 1: Account Creation */}
+          {currentStep === 1 && (
+            <div className="space-y-6">
+              <div className="text-center mb-6">
+                <h2 className="text-3xl font-bold text-gray-900 mb-2">
+                  Welcome to Designer's BFF
+                </h2>
+                <p className="text-gray-600">
+                  Your AI-powered fashion design assistant
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Your Name *
+                </label>
+                <input
+                  type="text"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-anatomie-accent focus:border-transparent"
+                  placeholder="Jane Doe"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Email *
+                </label>
+                <input
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-anatomie-accent focus:border-transparent"
+                  placeholder="jane@example.com"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Company/Brand
+                </label>
+                <input
+                  type="text"
+                  value={formData.company}
+                  onChange={(e) => setFormData({ ...formData, company: e.target.value })}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-anatomie-accent focus:border-transparent"
+                  placeholder="ANATOMIE"
+                />
+              </div>
+
+              <div className="space-y-3">
+                <button
+                  onClick={handleAccountSubmit}
+                  disabled={!formData.name || !formData.email}
+                  className="w-full bg-anatomie-accent text-white py-3 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                >
+                  Continue
+                </button>
+                <button
+                  onClick={() => {
+                    if (!formData.name || !formData.email) {
+                      alert('Please fill in your name and email first');
+                      return;
+                    }
+                    // Skip to Step 4 with mock data
+                    setCurrentStep(4);
+                    setIsProcessing(true);
+                    setProcessingMessage('Using demo data...');
+                    // Generate with mock VLT data
+                    const testUserId = 'ec058a8c-b2d7-4888-9e66-b7b02e393152';
+                    onboardingAPI.generateInitialImages(testUserId, {
+                      targetCount: 10,
+                      provider: 'google-imagen',
+                      onProgress: (progress, message) => {
+                        setProcessingProgress(progress);
+                        setProcessingMessage(message);
+                      },
+                    }).then(() => {
+                      setTimeout(() => navigate('/home'), 1500);
+                    }).catch((err) => {
+                      setError(err.message);
+                      setIsProcessing(false);
+                    });
+                  }}
+                  className="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-300 transition-all"
+                >
+                  Skip Portfolio & Use Demo Data
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 2: Portfolio Upload */}
+          {currentStep === 2 && (
+            <div className="space-y-6">
+              <div className="text-center mb-6">
+                <h2 className="text-3xl font-bold text-gray-900 mb-2">
+                  Upload Your Portfolio
+                </h2>
+                <p className="text-gray-600">
+                  Upload a ZIP file containing 50-500 images of your work
+                </p>
+              </div>
+
+              {/* Error Message */}
+              {error && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+                  <div className="flex items-start">
+                    <AlertCircle className="h-5 w-5 text-red-600 mr-3 mt-0.5 flex-shrink-0" />
+                    <div className="text-sm text-red-800">
+                      <p className="font-semibold mb-1">Upload Failed</p>
+                      <p>{error}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Instructions */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                <div className="flex items-start">
+                  <FileArchive className="h-5 w-5 text-blue-600 mr-3 mt-0.5 flex-shrink-0" />
+                  <div className="text-sm text-blue-800">
+                    <p className="font-semibold mb-2">📦 ZIP File Required</p>
+                    <p className="mb-2">The VLT API requires images to be uploaded as a ZIP file:</p>
+                    <ol className="list-decimal ml-4 space-y-1">
+                      <li>Create a folder with 50-500 of your product images</li>
+                      <li>Compress the folder into a .zip file</li>
+                      <li>Upload the ZIP file below</li>
+                    </ol>
+                    <p className="mt-2 text-xs text-blue-600">💡 Tip: Right-click the folder → "Compress" on macOS</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-12 text-center hover:border-anatomie-accent transition-colors">
+                <FileArchive className="h-16 w-16 text-gray-400 mx-auto mb-4" />
+                <p className="text-lg font-medium text-gray-700 mb-2">
+                  {uploadedZip ? uploadedZip.name : 'Drop your ZIP file here or click to browse'}
+                </p>
+                <p className="text-sm text-gray-500 mb-4">
+                  Upload a .zip file containing 50-500 images
+                </p>
+                <input
+                  type="file"
+                  accept=".zip,application/zip"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                  id="file-upload"
+                />
+                <label
+                  htmlFor="file-upload"
+                  className="inline-block bg-anatomie-accent text-white px-6 py-3 rounded-lg font-medium hover:bg-indigo-700 cursor-pointer transition-all"
+                >
+                  Select ZIP File
+                </label>
+              </div>
+
+              {uploadedZip && (
+                <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+                  <div>
+                    <p className="text-sm font-medium text-gray-700">
+                      ✓ ZIP file selected: {uploadedZip.name}
+                    </p>
+                    <p className="text-sm text-gray-600 mt-1">
+                      Size: {(uploadedZip.size / (1024 * 1024)).toFixed(2)} MB
+                    </p>
+                    <p className="text-sm text-gray-600 mt-1">
+                      Estimated images: ~{imageCount}
+                    </p>
+                  </div>
+
+                  {imageCount < 50 && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded p-3">
+                      <p className="text-sm text-yellow-800 font-medium mb-2">
+                        ⚠️ Estimate seems low
+                      </p>
+                      <p className="text-xs text-yellow-700 mb-2">
+                        The estimate is based on file size. If you know your ZIP contains 50+ images, you can specify the actual count:
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="50"
+                          max="500"
+                          placeholder="Actual count (optional)"
+                          value={actualImageCount || ''}
+                          onChange={(e) => setActualImageCount(e.target.value ? parseInt(e.target.value) : null)}
+                          className="flex-1 px-3 py-2 border border-yellow-300 rounded text-sm focus:ring-2 focus:ring-yellow-500 focus:border-transparent"
+                        />
+                        <span className="text-xs text-yellow-700">images</span>
+                      </div>
+                    </div>
+                  )}
+                  {imageCount >= 50 && imageCount <= 500 && (
+                    <p className="text-sm text-green-600 mt-2">
+                      ✅ Perfect! Ready to analyze your style
+                    </p>
+                  )}
+                  {imageCount > 500 && (
+                    <p className="text-sm text-red-600 mt-2">
+                      ⚠️ File seems large. Please ensure it contains maximum 500 images.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="flex space-x-4">
+                <button
+                  onClick={() => setCurrentStep(1)}
+                  className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-300 transition-all"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={handleZipUpload}
+                  disabled={!uploadedZip || ((actualImageCount || imageCount) > 500)}
+                  className="flex-1 bg-anatomie-accent text-white py-3 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                >
+                  Process Portfolio
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Processing */}
+          {currentStep === 3 ? (
+            <div className="space-y-6 py-8">
+              {/* Header */}
+              <div className="text-center mb-8">
+                <Loader className="h-16 w-16 text-anatomie-accent mx-auto animate-spin mb-4" />
+                <h2 className="text-3xl font-bold text-gray-900 mb-2">
+                  Analyzing Your Style DNA
+                </h2>
+                <p className="text-gray-600">
+                  {processingMessage || 'Using AI vision to decode your fashion signatures...'}
+                </p>
+                {/* Image counter */}
+                {currentImage && totalImages && (
+                  <div className="text-lg font-semibold text-anatomie-accent mt-4">
+                    Analyzing image {currentImage} of {totalImages}
+                  </div>
+                )}
+              </div>
+
+              {/* Visual Processing Area */}
+              <div className="relative">
+                {/* Main Visual Container */}
+                <div className="bg-gradient-to-br from-purple-50 to-indigo-50 rounded-2xl p-8 min-h-[400px] relative overflow-hidden">
+                  
+                  {/* Processed Images Stream - Hidden until backend sends actual images */}
+                  {processedImages.length > 0 && (
+                    <div className="text-center mb-6">
+                      <p className="text-sm font-medium text-gray-700 mb-6">
+                        ✨ Style Attributes Being Detected
+                      </p>
+                      
+                      <div className="flex justify-center items-center space-x-4 mb-6">
+                        {/* Latest processed image (hero) */}
+                        <div className="relative">
+                          <div className="w-32 h-32 rounded-xl overflow-hidden shadow-xl ring-4 ring-anatomie-accent ring-opacity-50 transform scale-110">
+                            <img
+                              src={processedImages[0]?.url}
+                              alt="Currently analyzing"
+                              className="w-full h-full object-cover animate-pulse"
+                            />
+                          </div>
+                          <div className="absolute -top-2 -right-2 bg-green-500 text-white text-xs px-2 py-1 rounded-full shadow-lg">
+                            ✓ Analyzed
+                          </div>
+                        </div>
+                        
+                        {/* Previous images (smaller) */}
+                        <div className="flex space-x-2">
+                          {processedImages.slice(1, 5).map((img, idx) => (
+                            <div 
+                              key={img.id}
+                              className="w-16 h-16 rounded-lg overflow-hidden shadow-md opacity-70 transform transition-all duration-500"
+                              style={{ 
+                                transform: `scale(${1 - (idx * 0.1)})`,
+                                opacity: 1 - (idx * 0.2)
+                              }}
+                            >
+                              <img
+                                src={img.url}
+                                alt={`Processed ${idx + 1}`}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* AI Analysis Visualization */}
+                  <div className="flex justify-center items-center space-x-8 mb-6">
+                    <div className="flex flex-col items-center">
+                      <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mb-2">
+                        <span className="text-2xl">👗</span>
+                      </div>
+                      <span className="text-xs text-gray-600">Garment Type</span>
+                    </div>
+                    <div className="flex flex-col items-center">
+                      <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mb-2">
+                        <span className="text-2xl">🎨</span>
+                      </div>
+                      <span className="text-xs text-gray-600">Color Palette</span>
+                    </div>
+                    <div className="flex flex-col items-center">
+                      <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-2">
+                        <span className="text-2xl">✨</span>
+                      </div>
+                      <span className="text-xs text-gray-600">Style Mood</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Progress Bar */}
+              <div className="mt-6 max-w-md mx-auto">
+                <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+                  <div
+                    className="bg-gradient-to-r from-purple-500 to-indigo-500 h-full transition-all duration-300 rounded-full"
+                    style={{ width: `${processingProgress}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-xs text-gray-500 mt-2">
+                  <span>{processingProgress}% complete</span>
+                  {totalImages && currentImage && (
+                    <span>~{Math.ceil((totalImages - currentImage) * 1.5 / 60)} min remaining</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Completion Message */}
+              {vltResult && (
+                <div className="space-y-6 mt-6">
+                  <div className="text-center">
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4 max-w-md mx-auto">
+                      <p className="text-green-600 font-semibold">✅ Style Analysis Complete!</p>
+                      <p className="text-sm text-green-700 mt-1">
+                        Analyzed {vltResult.records.length} images • {(Number(vltResult.summary.averageConfidence) * 100).toFixed(0)}% confidence
+                      </p>
+                    </div>
+                  </div>
+                  
+                  {/* VLT Analysis Results Display */}
+                  <div className="bg-white rounded-xl shadow-lg p-6 max-w-4xl mx-auto">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-4 text-center">Your Style DNA Analysis</h3>
+                    
+                    {/* Garment Types */}
+                    <div className="mb-6">
+                      <h4 className="flex items-center text-sm font-medium text-gray-700 mb-3">
+                        <span className="text-2xl mr-2">👗</span>
+                        Garment Types Found
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(vltResult.summary.garmentTypes || {}).map(([type, count]) => (
+                          <span key={type} className="px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-sm">
+                            {type} ({count})
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    {/* Color Palette */}
+                    <div className="mb-6">
+                      <h4 className="flex items-center text-sm font-medium text-gray-700 mb-3">
+                        <span className="text-2xl mr-2">🎨</span>
+                        Color Palette
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(vltResult.summary.dominantColors || {}).map(([color, count]) => (
+                          <span key={color} className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm">
+                            {color} ({count})
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    {/* Style Moods */}
+                    <div className="mb-6">
+                      <h4 className="flex items-center text-sm font-medium text-gray-700 mb-3">
+                        <span className="text-2xl mr-2">✨</span>
+                        Style Moods & Aesthetics
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {vltResult.records.slice(0, 10).map((record, idx) => {
+                          const styleMood = record.style?.mood || record.style?.overall || record.style?.aesthetic;
+                          if (!styleMood) return null;
+                          return (
+                            <span key={idx} className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm">
+                              {styleMood}
+                            </span>
+                          );
+                        }).filter(Boolean)}
+                      </div>
+                    </div>
+                    
+                    {/* Silhouettes */}
+                    <div className="mb-4">
+                      <h4 className="flex items-center text-sm font-medium text-gray-700 mb-3">
+                        <span className="text-2xl mr-2">📐</span>
+                        Silhouettes Detected
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(vltResult.summary.silhouettes || {}).map(([silhouette, count]) => (
+                          <span key={silhouette} className="px-3 py-1 bg-indigo-100 text-indigo-800 rounded-full text-sm">
+                            {silhouette} ({count})
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    <div className="text-center mt-4 p-3 bg-gray-50 rounded-lg">
+                      <p className="text-sm text-gray-600">
+                        🎯 This analysis will be used to generate designs that match <strong>your actual aesthetic</strong>, not generic templates.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {/* Step 4: Initial Generation */}
+          {currentStep === 4 ? (
+            <div className="space-y-8 py-8">
+              {/* Header */}
+              <div className="text-center">
+                <div className="relative inline-block mb-4">
+                  <Sparkles className="h-16 w-16 text-anatomie-accent mx-auto animate-spin" />
+                  <div className="absolute inset-0 animate-ping">
+                    <Sparkles className="h-16 w-16 text-anatomie-accent opacity-20" />
+                  </div>
+                </div>
+                <h2 className="text-3xl font-bold text-gray-900 mb-2">
+                  Creating Your Fashion Universe
+                </h2>
+                <p className="text-gray-600 max-w-xl mx-auto">
+                  {processingMessage || 'Our AI is crafting 20 unique designs inspired by your style DNA...'}
+                </p>
+                
+                {/* Creative Progress Stats */}
+                <div className="flex justify-center items-center space-x-8 mt-6 text-sm">
+                  <div className="flex items-center space-x-2">
+                    <div className="w-3 h-3 bg-purple-500 rounded-full animate-pulse"></div>
+                    <span className="text-gray-600">Analyzing Style</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse" style={{ animationDelay: '0.5s' }}></div>
+                    <span className="text-gray-600">Generating Prompts</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" style={{ animationDelay: '1s' }}></div>
+                    <span className="text-gray-600">Creating Images</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Creative Generation Visualization */}
+              <div className="bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 rounded-2xl p-8 relative overflow-hidden">
+                {/* Background Pattern */}
+                <div className="absolute inset-0 opacity-10">
+                  <div className="absolute top-4 left-4 text-6xl animate-bounce" style={{ animationDelay: '0s' }}>✨</div>
+                  <div className="absolute top-12 right-8 text-4xl animate-bounce" style={{ animationDelay: '1s' }}>🎨</div>
+                  <div className="absolute bottom-8 left-12 text-5xl animate-bounce" style={{ animationDelay: '2s' }}>👗</div>
+                  <div className="absolute bottom-4 right-4 text-3xl animate-bounce" style={{ animationDelay: '1.5s' }}>💫</div>
+                </div>
+
+                {/* Main Content */}
+                <div className="relative z-10">
+                  {/* Style Prompts Showcase */}
+                  <div className="text-center mb-8">
+                    <p className="text-lg font-medium text-gray-800 mb-4">
+                      🧠 AI Style Prompts Being Generated
+                    </p>
+                    
+                    {/* Actual Style Prompts from VLT Analysis */}
+                    <div className="flex flex-wrap justify-center gap-3 mb-6">
+                      {vltResult ? 
+                        // Show actual VLT-based prompts if analysis is complete
+                        Object.entries(vltResult.summary.garmentTypes || {}).slice(0, 5).map(([garmentType, count], idx) => (
+                          <div
+                            key={idx}
+                            className="px-4 py-2 bg-white/80 backdrop-blur-sm rounded-full text-sm text-gray-700 shadow-lg transform transition-all duration-500 hover:scale-105"
+                            style={{
+                              animation: `fadeInUp 0.6s ease-out ${idx * 0.2}s both`,
+                              opacity: processingProgress > (idx + 1) * 15 ? 1 : 0.3
+                            }}
+                          >
+                            "{garmentType} designs in your signature style" ({count} items)
+                          </div>
+                        ))
+                        :
+                        // Generic prompts while VLT analysis is running
+                        [
+                          'analyzing your unique aesthetic',
+                          'identifying signature garment types',
+                          'mapping color preferences',
+                          'detecting style patterns',
+                          'creating personalized templates'
+                        ].map((prompt, idx) => (
+                          <div
+                            key={idx}
+                            className="px-4 py-2 bg-white/80 backdrop-blur-sm rounded-full text-sm text-gray-700 shadow-lg transform transition-all duration-500 hover:scale-105"
+                            style={{
+                              animation: `fadeInUp 0.6s ease-out ${idx * 0.2}s both`,
+                              opacity: processingProgress > (idx + 1) * 15 ? 1 : 0.3
+                            }}
+                          >
+                            "{prompt}"
+                          </div>
+                        ))
+                      }
+                    </div>
+                  </div>
+
+                  {/* Enhanced Preview Images Grid - REAL generated images streaming */}
+                  {previewImages.length > 0 && (
+                    <div className="space-y-6">
+                      <p className="text-center font-medium text-gray-800">
+                        🎯 Sneak Peek: Latest {previewImages.length} Generated Images
+                      </p>
+                      <p className="text-center text-xs text-gray-600 -mt-4">
+                        (More surprises waiting in your gallery! 🎨)
+                      </p>
+                      
+                      <div className="grid grid-cols-3 gap-4 max-w-2xl mx-auto">
+                        {previewImages.map((img, idx) => (
+                          <div 
+                            key={img.id}
+                            className="group relative aspect-square rounded-xl overflow-hidden shadow-xl transition-all duration-500 hover:scale-105"
+                            style={{
+                              animation: `slideInUp 0.6s ease-out ${idx * 0.1}s both`
+                            }}
+                          >
+                            <img 
+                              src={img.url} 
+                              alt={`Generated design ${idx + 1}`}
+                              className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
+                              onError={(e) => {
+                                const target = e.target as HTMLImageElement;
+                                target.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="100" height="100"%3E%3Crect fill="%23f3f4f6" width="100" height="100"/%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" fill="%239ca3af" font-size="12"%3EGenerating...%3C/text%3E%3C/svg%3E';
+                              }}
+                            />
+                            
+                            {/* Overlay with Style Info */}
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                              <div className="absolute bottom-2 left-2 right-2">
+                                <div className="text-white text-xs text-center">
+                                  <div className="bg-white/20 backdrop-blur-sm rounded px-2 py-1">
+                                    Fresh • AI-Generated
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            {/* New Badge */}
+                            <div className="absolute -top-1 -right-1 bg-green-500 text-white text-xs px-2 py-1 rounded-full shadow-lg animate-pulse">
+                              ✨ New
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Generation Stats */}
+                  <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl mx-auto">
+                    <div className="text-center p-4 bg-white/50 backdrop-blur-sm rounded-lg">
+                      <div className="text-2xl font-bold text-purple-600">{Math.floor(processingProgress * 0.6)}</div>
+                      <div className="text-xs text-gray-600">Prompts Created</div>
+                    </div>
+                    <div className="text-center p-4 bg-white/50 backdrop-blur-sm rounded-lg">
+                      <div className="text-2xl font-bold text-blue-600">{previewImages.length}</div>
+                      <div className="text-xs text-gray-600">Images Generated</div>
+                    </div>
+                    <div className="text-center p-4 bg-white/50 backdrop-blur-sm rounded-lg">
+                      <div className="text-2xl font-bold text-green-600">{Math.floor(processingProgress * 0.05)}</div>
+                      <div className="text-xs text-gray-600">Style Variations</div>
+                    </div>
+                    <div className="text-center p-4 bg-white/50 backdrop-blur-sm rounded-lg">
+                      <div className="text-2xl font-bold text-pink-600">AI</div>
+                      <div className="text-xs text-gray-600">Powered</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Enhanced Progress Bar */}
+              <div className="max-w-lg mx-auto space-y-4">
+                <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden shadow-inner">
+                  <div
+                    className="bg-gradient-to-r from-purple-500 via-pink-500 to-indigo-500 h-full transition-all duration-500 rounded-full relative overflow-hidden"
+                    style={{ width: `${processingProgress}%` }}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-pulse"></div>
+                  </div>
+                </div>
+                
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-gray-600">{processingProgress}% Complete</span>
+                  {isProcessing && (
+                    <span className="text-gray-500 flex items-center space-x-1">
+                      <span>⏱️</span>
+                      <span>5-10 min remaining</span>
+                    </span>
+                  )}
+                </div>
+                
+                {/* Motivational Message */}
+                {isProcessing && (
+                  <div className="text-center">
+                    <p className="text-sm text-gray-600 italic">
+                      "Great design takes time. Grab a coffee ☕ while we craft your personalized fashion collection!"
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+    </div>
+  );
+};
+
+export default Onboarding;

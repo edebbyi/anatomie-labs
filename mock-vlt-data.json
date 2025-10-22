@@ -1,0 +1,150 @@
+{
+  "success": true,
+  "data": {
+    "jobId": "mock-job-123",
+    "status": "completed",
+    "backend": "gemini",
+    "model": "gemini",
+    "timestamp": "2025-10-13T21:59:00.000Z",
+    "records": [
+      {
+        "imageId": "img_1",
+        "garmentType": "dress",
+        "silhouette": "fitted",
+        "fabric": {
+          "type": "silk",
+          "texture": "smooth",
+          "weight": "medium",
+          "finish": "glossy"
+        },
+        "colors": {
+          "primary": "black",
+          "secondary": "white",
+          "pattern": null
+        },
+        "construction": {
+          "seams": "princess seams",
+          "closure": "side zipper",
+          "details": "minimal"
+        },
+        "style": {
+          "aesthetic": "minimalist",
+          "formality": "formal",
+          "season": "all-season"
+        },
+        "promptText": "Black fitted silk dress with princess seams",
+        "confidence": 0.92,
+        "attributes": {
+          "garment_type": "dress",
+          "silhouette": "fitted",
+          "fabric_type": "silk",
+          "primary_color": "black",
+          "aesthetic": "minimalist",
+          "formality": "formal"
+        }
+      },
+      {
+        "imageId": "img_2", 
+        "garmentType": "blouse",
+        "silhouette": "relaxed",
+        "fabric": {
+          "type": "cotton",
+          "texture": "soft",
+          "weight": "light",
+          "finish": "matte"
+        },
+        "colors": {
+          "primary": "white",
+          "secondary": null,
+          "pattern": null
+        },
+        "construction": {
+          "seams": "flat-fell seams",
+          "closure": "button-up",
+          "details": "collared"
+        },
+        "style": {
+          "aesthetic": "classic",
+          "formality": "casual",
+          "season": "spring"
+        },
+        "promptText": "White cotton relaxed blouse with button-up front",
+        "confidence": 0.88,
+        "attributes": {
+          "garment_type": "blouse",
+          "silhouette": "relaxed",
+          "fabric_type": "cotton",
+          "primary_color": "white", 
+          "aesthetic": "classic",
+          "formality": "casual"
+        }
+      },
+      {
+        "imageId": "img_3",
+        "garmentType": "skirt",
+        "silhouette": "A-line",
+        "fabric": {
+          "type": "wool",
+          "texture": "structured",
+          "weight": "medium",
+          "finish": "matte"
+        },
+        "colors": {
+          "primary": "navy",
+          "secondary": null,
+          "pattern": null
+        },
+        "construction": {
+          "seams": "darts",
+          "closure": "side zipper",
+          "details": "pleated"
+        },
+        "style": {
+          "aesthetic": "professional",
+          "formality": "business",
+          "season": "fall"
+        },
+        "promptText": "Navy wool A-line skirt with pleats",
+        "confidence": 0.85,
+        "attributes": {
+          "garment_type": "skirt",
+          "silhouette": "A-line",
+          "fabric_type": "wool",
+          "primary_color": "navy",
+          "aesthetic": "professional", 
+          "formality": "business"
+        }
+      }
+    ],
+    "summary": {
+      "totalImages": 3,
+      "garmentTypes": {
+        "dress": 1,
+        "blouse": 1,
+        "skirt": 1
+      },
+      "dominantColors": {
+        "black": 1,
+        "white": 1,
+        "navy": 1
+      },
+      "fabricTypes": {
+        "silk": 1,
+        "cotton": 1,
+        "wool": 1
+      },
+      "silhouettes": {
+        "fitted": 1,
+        "relaxed": 1,
+        "A-line": 1
+      },
+      "averageConfidence": "0.88"
+    }
+  },
+  "meta": {
+    "processingTime": "5000ms",
+    "model": "gemini",
+    "passes": "A,B,C",
+    "imageCount": 3
+  }
+}

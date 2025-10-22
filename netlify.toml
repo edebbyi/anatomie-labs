@@ -1,0 +1,7 @@
+[build]
+  functions = "netlify/functions"
+
+[dev]
+  functions = "netlify/functions"
+  targetPort = 8888
+  port = 8888

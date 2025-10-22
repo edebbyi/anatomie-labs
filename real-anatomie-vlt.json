@@ -1,0 +1,228 @@
+{
+  "userId": "b9d63aeb-03b8-4d8e-be6c-051179eec3da",
+  "vltResult": {
+    "jobId": "local_1760393909761",
+    "status": "completed",
+    "backend": "local_fashion_analysis",
+    "model": "replicate_vision",
+    "timestamp": "2025-10-13T22:18:29.761Z",
+    "records": [
+      {
+        "imageId": "capsule-image-1760220109970.jpg",
+        "garmentType": "two-piece",
+        "silhouette": "fitted",
+        "fabric": {
+          "type": "wool",
+          "texture": "smooth",
+          "weight": "medium",
+          "finish": "matte"
+        },
+        "colors": {
+          "primary": "black",
+          "secondary": "white",
+          "pattern": null
+        },
+        "construction": {
+          "seams": "standard",
+          "closure": "zipper",
+          "details": ["tailored cuts, structured shoulders"]
+        },
+        "style": {
+          "aesthetic": "professional",
+          "secondary": "minimalist",
+          "formality": "formal",
+          "season": "all-season",
+          "overall": "professional",
+          "mood": "high-end fashion",
+          "occasion": "work, formal events"
+        },
+        "promptText": "professional style with minimalist influences, two-piece, fitted silhouette, black wool, tailored cuts",
+        "confidence": 0.9,
+        "attributes": {
+          "primaryAesthetic": "professional",
+          "secondaryAesthetic": "minimalist",
+          "detectedOccasion": "work, formal events",
+          "brandVibe": "high-end fashion"
+        }
+      },
+      {
+        "imageId": "tmp08ifx9mx.jpg",
+        "garmentType": "two-piece",
+        "silhouette": "fitted",
+        "fabric": {
+          "type": "cotton",
+          "texture": "smooth",
+          "weight": "medium",
+          "finish": "matte"
+        },
+        "colors": {
+          "primary": "neutral",
+          "secondary": "colors",
+          "pattern": null
+        },
+        "construction": {
+          "seams": "standard",
+          "closure": "zipper",
+          "details": ["clean lines, simple design, sneakers"]
+        },
+        "style": {
+          "aesthetic": "sporty",
+          "secondary": "minimalist",
+          "formality": "casual",
+          "season": "all-season",
+          "overall": "sporty",
+          "mood": "high-street",
+          "occasion": "everyday wear"
+        },
+        "promptText": "sporty style with minimalist influences, two-piece, fitted silhouette, neutral cotton, clean lines",
+        "confidence": 0.9,
+        "attributes": {
+          "primaryAesthetic": "sporty",
+          "secondaryAesthetic": "minimalist",
+          "detectedOccasion": "everyday wear",
+          "brandVibe": "high-street"
+        }
+      },
+      {
+        "imageId": "tmp09el4fcl.jpg",
+        "garmentType": "dress",
+        "silhouette": "fitted",
+        "fabric": {
+          "type": "wool",
+          "texture": "smooth",
+          "weight": "medium",
+          "finish": "matte"
+        },
+        "colors": {
+          "primary": "black",
+          "secondary": "white",
+          "pattern": null
+        },
+        "construction": {
+          "seams": "standard",
+          "closure": "zipper",
+          "details": ["collar, buttons, pockets"]
+        },
+        "style": {
+          "aesthetic": "chic",
+          "secondary": "minimalist", 
+          "formality": "formal",
+          "season": "all-season",
+          "overall": "chic",
+          "mood": "high-end fashion",
+          "occasion": "work, special event"
+        },
+        "promptText": "chic style with minimalist influences, dress, fitted silhouette, black wool, collar and buttons",
+        "confidence": 0.9,
+        "attributes": {
+          "primaryAesthetic": "chic",
+          "secondaryAesthetic": "minimalist",
+          "detectedOccasion": "work, special event",
+          "brandVibe": "high-end fashion"
+        }
+      },
+      {
+        "imageId": "tmp122ll52e.jpg",
+        "garmentType": "dress",
+        "silhouette": "fitted",
+        "fabric": {
+          "type": "wool",
+          "texture": "smooth",
+          "weight": "medium",
+          "finish": "matte"
+        },
+        "colors": {
+          "primary": "gray",
+          "secondary": "black",
+          "pattern": null
+        },
+        "construction": {
+          "seams": "standard",
+          "closure": "zipper",
+          "details": ["tailored cut, leather trim, button-up front"]
+        },
+        "style": {
+          "aesthetic": "chic",
+          "secondary": "minimalist",
+          "formality": "semi-formal",
+          "season": "all-season",
+          "overall": "chic",
+          "mood": "high-end fashion",
+          "occasion": "work, special event"
+        },
+        "promptText": "chic style with minimalist influences, dress, fitted silhouette, gray wool, leather trim",
+        "confidence": 0.9,
+        "attributes": {
+          "primaryAesthetic": "chic",
+          "secondaryAesthetic": "minimalist",
+          "detectedOccasion": "work, special event",
+          "brandVibe": "high-end fashion"
+        }
+      },
+      {
+        "imageId": "tmp1bksc1ns.jpg",
+        "garmentType": "dress",
+        "silhouette": "fitted",
+        "fabric": {
+          "type": "wool",
+          "texture": "smooth",
+          "weight": "medium",
+          "finish": "matte"
+        },
+        "colors": {
+          "primary": "black",
+          "secondary": "white",
+          "pattern": null
+        },
+        "construction": {
+          "seams": "standard",
+          "closure": "zipper",
+          "details": ["simple, clean lines, structured shoulders"]
+        },
+        "style": {
+          "aesthetic": "minimalist",
+          "secondary": "professional",
+          "formality": "formal",
+          "season": "all-season",
+          "overall": "minimalist",
+          "mood": "high-end fashion",
+          "occasion": "work, formal event"
+        },
+        "promptText": "minimalist style with professional influences, dress, fitted silhouette, black wool, clean lines",
+        "confidence": 0.9,
+        "attributes": {
+          "primaryAesthetic": "minimalist",
+          "secondaryAesthetic": "professional",
+          "detectedOccasion": "work, formal event",
+          "brandVibe": "high-end fashion"
+        }
+      }
+    ],
+    "summary": {
+      "totalImages": 5,
+      "garmentTypes": {
+        "two-piece": 2,
+        "dress": 3
+      },
+      "dominantColors": {
+        "black": 3,
+        "neutral": 1,
+        "gray": 1
+      },
+      "fabricTypes": {
+        "wool": 4,
+        "cotton": 1
+      },
+      "silhouettes": {
+        "fitted": 5
+      },
+      "styleAesthetics": {
+        "professional": 2,
+        "chic": 2,
+        "sporty": 1,
+        "minimalist": 1
+      },
+      "averageConfidence": "0.90"
+    }
+  }
+}

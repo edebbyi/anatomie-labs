@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Registration Test</title>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+</head>
+<body>
+    <h1>Registration Test</h1>
+    <button onclick="testRegistration()">Test Registration</button>
+    <div id="results"></div>
+
+    <script>
+        const API_URL = 'http://localhost:3001/api';
+        
+        async function testRegistration() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<p>Testing registration...</p>';
+            
+            try {
+                const testUser = {
+                    name: 'Browser Test User ' + Date.now(),
+                    email: `browsertest.${Date.now()}@example.com`,
+                    password: 'testpassword123'
+                };
+
+                console.log('🚀 Testing registration from browser:', testUser);
+
+                const response = await axios.post(`${API_URL}/auth/register`, testUser, {
+                    timeout: 30000,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    }
+                });
+
+                console.log('✅ Registration successful:', response.data);
+                resultsDiv.innerHTML = `
+                    <p style="color: green;">✅ Registration successful!</p>
+                    <p>User ID: ${response.data.data.user.id}</p>
+                    <p>Email: ${response.data.data.user.email}</p>
+                    <p>Token: ${response.data.data.token.substring(0, 20)}...</p>
+                `;
+
+            } catch (error) {
+                console.error('❌ Registration failed:', error);
+                
+                let errorMessage = 'Unknown error';
+                if (error.response) {
+                    errorMessage = `Server Error: ${error.response.status} - ${error.response.data?.message || 'Unknown'}`;
+                } else if (error.request) {
+                    errorMessage = 'Network Error: No response from server';
+                } else {
+                    errorMessage = error.message;
+                }
+
+                resultsDiv.innerHTML = `
+                    <p style="color: red;">❌ Registration failed!</p>
+                    <p>Error: ${errorMessage}</p>
+                    <p>Check console for details</p>
+                `;
+            }
+        }
+
+        // Test CORS preflight
+        window.addEventListener('load', () => {
+            console.log('🌐 Testing CORS...');
+            fetch(`${API_URL}/auth/register`, {
+                method: 'OPTIONS'
+            }).then(response => {
+                console.log('✅ CORS preflight response:', response.status);
+                console.log('CORS headers:', {
+                    'Access-Control-Allow-Origin': response.headers.get('Access-Control-Allow-Origin'),
+                    'Access-Control-Allow-Methods': response.headers.get('Access-Control-Allow-Methods'),
+                    'Access-Control-Allow-Headers': response.headers.get('Access-Control-Allow-Headers')
+                });
+            }).catch(error => {
+                console.error('❌ CORS preflight failed:', error);
+            });
+        });
+    </script>
+</body>
+</html>

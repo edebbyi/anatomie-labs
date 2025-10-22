@@ -1,0 +1,26 @@
+# Ignore node modules
+node_modules/
+
+# Ignore logs
+*.log
+
+# Ignore system files
+.DS_Store
+
+# Ignore environment secrets
+.env
+.env.local
+.env.*.local
+.env.bak
+.DS_Store
+
+# Ignore archives and large binaries
+*.zip
+*.tar
+*.gz
+*.7z
+backend.pid
+podna.db
+
+# Local Netlify folder
+.netlify
