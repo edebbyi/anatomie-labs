@@ -13,11 +13,15 @@ const db = require('../../services/database');
 
 // Import agents
 const ingestionAgent = require('../../services/ingestionAgent');
-const styleDescriptorAgent = require('../../services/styleDescriptorAgent');
+const styleDescriptorAgent = require('../../services/enhancedStyleDescriptorAgent');
 const trendAnalysisAgent = require('../../services/trendAnalysisAgent');
-const promptBuilderAgent = require('../../services/promptBuilderAgent');
+const promptBuilderAgent = require('../../services/advancedPromptBuilderAgent');
 const imageGenerationAgent = require('../../services/imageGenerationAgent');
 const feedbackLearnerAgent = require('../../services/feedbackLearnerAgent');
+const continuousLearningAgent = require('../../services/continuousLearningAgent');
+const validationAgent = require('../../services/validationAgent');
+
+const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
 
@@ -113,7 +117,7 @@ router.post('/analyze/:portfolioId', authMiddleware, asyncHandler(async (req, re
     });
 
     // Analyze with Style Descriptor Agent with progress callback
-    const result = await styleDescriptorAgent.analyzePortfolio(portfolioId, (progress) => {
+    const result = await styleDescriptorAgent.analyzePortfolio(portfolioId, async (progress) => {
       // Update progress
       analysisProgress.set(portfolioId, {
         status: 'analyzing',
@@ -126,6 +130,19 @@ router.post('/analyze/:portfolioId', authMiddleware, asyncHandler(async (req, re
         message: `Analyzing image ${progress.current} of ${progress.total}...`,
         error: progress.error
       });
+      
+      // Track interaction for continuous learning
+      if (progress.currentImage) {
+        await continuousLearningAgent.trackInteraction(userId, uuidv4(), {
+          event_type: 'image_analysis_progress',
+          duration_ms: 1000, // Placeholder
+          metadata: {
+            portfolioId,
+            current: progress.current,
+            total: progress.total
+          }
+        });
+      }
     });
 
     // Mark as complete
@@ -394,13 +411,23 @@ router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
   logger.info('Podna: Generating image', { userId, mode, provider });
 
   try {
-    // Generate prompt with Prompt Builder Agent
+    // Generate prompt with Advanced Prompt Builder Agent using Thompson Sampling
     const prompt = await promptBuilderAgent.generatePrompt(userId, { mode, constraints });
 
     // Generate image with Image Generation Agent
     const generation = await imageGenerationAgent.generateImage(userId, prompt.id, { 
       provider, 
       upscale 
+    });
+
+    // Track generation interaction for continuous learning
+    await continuousLearningAgent.trackInteraction(userId, generation.id, {
+      event_type: 'image_generation',
+      metadata: {
+        promptId: prompt.id,
+        provider,
+        mode
+      }
     });
 
     res.json({
@@ -446,6 +473,17 @@ router.post('/generate/batch', authMiddleware, asyncHandler(async (req, res) => 
     });
 
     const totalCost = generations.reduce((sum, g) => sum + (g.cost_cents || 0), 0);
+
+    // Track batch generation interaction for continuous learning
+    await continuousLearningAgent.trackInteraction(userId, uuidv4(), {
+      event_type: 'batch_generation',
+      metadata: {
+        count,
+        mode,
+        provider,
+        actualCount: generations.length
+      }
+    });
 
     res.json({
       success: true,
@@ -519,6 +557,16 @@ router.post('/feedback', authMiddleware, asyncHandler(async (req, res) => {
     const result = await feedbackLearnerAgent.processFeedback(userId, generationId, { 
       type, 
       note 
+    });
+
+    // Track feedback interaction for continuous learning
+    await continuousLearningAgent.trackInteraction(userId, generationId, {
+      event_type: 'feedback',
+      metadata: {
+        feedbackType: type,
+        hasNote: !!note,
+        feedbackId: result.feedback.id
+      }
     });
 
     res.json({
@@ -600,13 +648,42 @@ router.post('/onboard', authMiddleware, upload.single('portfolio'), asyncHandler
     const uploadResult = await ingestionAgent.processZipUpload(userId, zipBuffer, filename);
     const portfolioId = uploadResult.portfolio.id;
 
+    // Track ingestion interaction
+    await continuousLearningAgent.trackInteraction(userId, uuidv4(), {
+      event_type: 'portfolio_upload',
+      metadata: {
+        portfolioId,
+        imageCount: uploadResult.portfolio.imageCount,
+        filename
+      }
+    });
+
     // Step 2: Analyze images
     logger.info('Podna Onboarding: Step 2/4 - Analyzing images');
     const analysisResult = await styleDescriptorAgent.analyzePortfolio(portfolioId);
 
+    // Track analysis interaction
+    await continuousLearningAgent.trackInteraction(userId, uuidv4(), {
+      event_type: 'portfolio_analysis',
+      metadata: {
+        portfolioId,
+        analyzed: analysisResult.analyzed,
+        failed: analysisResult.failed
+      }
+    });
+
     // Step 3: Generate style profile
     logger.info('Podna Onboarding: Step 3/4 - Generating style profile');
     const profile = await trendAnalysisAgent.generateStyleProfile(userId, portfolioId);
+
+    // Track profile generation interaction
+    await continuousLearningAgent.trackInteraction(userId, uuidv4(), {
+      event_type: 'profile_generation',
+      metadata: {
+        portfolioId,
+        profileId: profile.id
+      }
+    });
 
     // Step 4: Generate initial images (optional)
     let generations = [];
@@ -614,6 +691,15 @@ router.post('/onboard', authMiddleware, upload.single('portfolio'), asyncHandler
       logger.info('Podna Onboarding: Step 4/4 - Generating initial images');
       generations = await imageGenerationAgent.generateBatch(userId, initialCount, { 
         mode: 'exploratory' 
+      });
+      
+      // Track initial generation interaction
+      await continuousLearningAgent.trackInteraction(userId, uuidv4(), {
+        event_type: 'initial_generation',
+        metadata: {
+          count: initialCount,
+          actualCount: generations.length
+        }
       });
     }
 
