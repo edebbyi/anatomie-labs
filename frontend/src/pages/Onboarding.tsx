@@ -11,6 +11,7 @@ const Onboarding: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState('');
+  const [detailedProgress, setDetailedProgress] = useState<string>('');  // NEW: Detailed progress
   const [error, setError] = useState<string | null>(null);
 
   const currentUser = authAPI.getCurrentUser();
@@ -61,21 +62,21 @@ const Onboarding: React.FC = () => {
       setProgress(10);
       console.log('📤 Step 1: Creating FormData with ZIP file');
 
-      // Upload ZIP using the new agents endpoint
+      // Upload ZIP using the new Podna endpoint
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append('portfolio', file);  // Changed from 'file' to 'portfolio'
       
       setMessage('Processing portfolio with AI agents...');
       setProgress(20);
 
       const token = authAPI.getToken();
       const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
-      const uploadUrl = `${apiUrl}/agents/portfolio/upload`;
+      
+      // Step 1: Upload portfolio ZIP to Podna system
+      const uploadUrl = `${apiUrl}/podna/upload`;
       console.log('🔑 Auth token obtained:', token ? '✅ Valid' : '❌ Missing');
-      console.log('🌐 Making request to:', uploadUrl);
+      console.log('🌐 Step 1 - Upload to:', uploadUrl);
 
-      // Call the unified portfolio upload endpoint
-      // This handles: ZIP extraction → R2 upload → Visual Analyst analysis → Initial generation
       const response = await fetch(uploadUrl, {
         method: 'POST',
         headers: {
@@ -96,44 +97,160 @@ const Onboarding: React.FC = () => {
         throw new Error(errorData.message || 'Upload failed');
       }
 
-      const result = await response.json();
-      console.log('✅ Upload successful! Result:', result);
+      const uploadResult = await response.json();
+      console.log('✅ Upload successful! Result:', uploadResult);
       
-      if (!result.success) {
-        console.error('❌ Processing failed:', result);
-        throw new Error(result.message || 'Processing failed');
+      if (!uploadResult.success) {
+        console.error('❌ Upload failed:', uploadResult);
+        throw new Error(uploadResult.message || 'Upload failed');
       }
 
-      console.log('📊 Portfolio analysis complete:', {
-        imagesUploaded: result.data?.imagesUploaded,
-        hasProfile: !!result.data?.profile,
-        hasGeneration: !!result.data?.initialGeneration
-      });
-      console.log('🔍 Full initialGeneration object:', result.data?.initialGeneration);
-
-      setMessage('Portfolio analyzed! Style profile created.');
-      setProgress(60);
-
-      // The endpoint already generated images, extract them
-      // Check multiple possible locations for images
-      const images = result.data?.initialGeneration?.results?.results || // Agents service format
-                     result.data?.initialGeneration?.images || 
-                     result.data?.initialGeneration?.results || 
-                     result.data?.initialGeneration?.data?.images ||
-                     result.data?.images;
+      const portfolioId = uploadResult.data?.portfolioId;
+      const imageCount = uploadResult.data?.imageCount || 0;
+      console.log('📦 Portfolio ID:', portfolioId);
+      console.log('🖼️  Images uploaded:', imageCount);
       
-      if (images && images.length > 0) {
-        console.log('🎨 Processing generated images:', images.length);
-        console.log('📸 Sample image:', images[0]);
-        setMessage('Initial designs generated!');
-        setProgress(90);
+      if (imageCount === 0) {
+        throw new Error(
+          'No images were found in your ZIP file. Please ensure your ZIP contains image files ' +
+          '(.jpg, .jpeg, .png, .webp) at the root level (not in a subfolder) and try again.'
+        );
+      }
+      
+      // Step 2: Analyze portfolio with Gemini via Replicate
+      setMessage('Analyzing images with AI...');
+      setProgress(30);
+      setDetailedProgress('Starting image analysis...');
+      console.log('🔬 Step 2 - Analyzing portfolio:', portfolioId);
+      
+      const analyzeUrl = `${apiUrl}/podna/analyze/${portfolioId}`;
+      
+      // Start polling for progress
+      const progressInterval = setInterval(async () => {
+        try {
+          const progressResponse = await fetch(`${analyzeUrl}/progress`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          
+          if (progressResponse.ok) {
+            const progressData = await progressResponse.json();
+            if (progressData.success && progressData.data) {
+              const prog = progressData.data;
+              
+              if (prog.status === 'analyzing') {
+                // Update progress bar (30% base + up to 20% for analysis)
+                const analysisProgress = 30 + Math.round((prog.percentage / 100) * 20);
+                setProgress(analysisProgress);
+                
+                // Update detailed message
+                const detail = `Analyzing image ${prog.current} of ${prog.total}...`;
+                setDetailedProgress(detail);
+                
+                console.log('📊 Analysis progress:', {
+                  current: prog.current,
+                  total: prog.total,
+                  percentage: prog.percentage,
+                  image: prog.currentImage
+                });
+              } else if (prog.status === 'complete') {
+                setDetailedProgress(`Complete! Analyzed ${prog.analyzed} images.`);
+                clearInterval(progressInterval);
+              }
+            }
+          }
+        } catch (err) {
+          console.log('Progress check failed:', err);
+        }
+      }, 2000); // Poll every 2 seconds
+      
+      // Start the analysis
+      const analyzeResponse = await fetch(analyzeUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      // Stop polling
+      clearInterval(progressInterval);
+      
+      const analyzeResult = await analyzeResponse.json();
+      console.log('✅ Analysis complete:', analyzeResult);
+      
+      if (!analyzeResult.success) {
+        throw new Error(analyzeResult.message || 'Analysis failed');
+      }
+      
+      // Step 3: Generate style profile
+      setMessage('Creating your style profile...');
+      setProgress(50);
+      console.log('👤 Step 3 - Generating style profile');
+      
+      const profileUrl = `${apiUrl}/podna/profile/generate/${portfolioId}`;
+      const profileResponse = await fetch(profileUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      const profileResult = await profileResponse.json();
+      console.log('✅ Profile created:', profileResult);
+      
+      if (!profileResult.success) {
+        throw new Error(profileResult.message || 'Profile generation failed');
+      }
+      
+      // Step 4: Generate initial images with Imagen-4 Ultra
+      setMessage('Generating your first custom designs...');
+      setProgress(70);
+      console.log('🎨 Step 4 - Generating initial images');
+      
+      const generateUrl = `${apiUrl}/podna/generate/batch`;
+      const generateResponse = await fetch(generateUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          count: 5,  // Generate 5 initial images (reduced from 8 for faster onboarding)
+          mode: 'exploratory',  // Use exploratory mode
+          provider: 'imagen-4-ultra'  // Use Imagen-4 Ultra via Replicate
+        })
+      });
+      
+      const generateResult = await generateResponse.json();
+      console.log('✅ Generation complete:', generateResult);
+      
+      if (!generateResult.success) {
+        console.warn('⚠️ Generation failed:', generateResult.message);
+        // Don't throw - continue without images
+      }
+
+      setMessage('Your custom designs are ready!');
+      setProgress(90);
+
+      // Extract generated images from Podna response
+      const generations = generateResult.data?.generations || [];
+      
+      if (generations.length > 0) {
+        console.log('🎨 Processing generated images:', generations.length);
+        console.log('📸 Sample generation:', generations[0]);
         
         // Save generated images to localStorage for Home page
-        const newImages = images.map((img: any, idx: number) => ({
-          id: img.image_id || img.id || `onboard-${Date.now()}-${idx}`,
-          url: img.url || img.image_url || img.cdnUrl,
-          prompt: img.prompt || 'Initial onboarding generation',
-          timestamp: new Date()
+        const newImages = generations.map((gen: any, idx: number) => ({
+          id: gen.id || `onboard-${Date.now()}-${idx}`,
+          url: gen.url,
+          prompt: gen.prompt_text || gen.text || 'Custom design from your style',
+          timestamp: new Date(),
+          metadata: {
+            generationId: gen.id,
+            promptId: gen.prompt_id,
+            spec: gen.json_spec
+          }
         }));
         console.log('💾 Saving images to localStorage:', newImages.length);
         console.log('🖼️ First image URL:', newImages[0]?.url);
@@ -141,9 +258,7 @@ const Onboarding: React.FC = () => {
         localStorage.setItem('aiGeneratedImages', JSON.stringify(newImages));
         console.log('✅ Images saved successfully');
       } else {
-        console.warn('⚠️ No images found in response');
-        console.log('📦 Full result.data:', result.data);
-        console.log('🔎 initialGeneration structure:', Object.keys(result.data?.initialGeneration || {}));
+        console.warn('⚠️ No images generated, but onboarding will continue');
       }
 
       setProgress(100);
@@ -181,7 +296,10 @@ const Onboarding: React.FC = () => {
         <div className="max-w-md w-full text-center">
           <Loader className="w-16 h-16 text-gray-900 mx-auto animate-spin mb-8" />
           <h1 className="text-3xl font-light text-gray-900 mb-2">Analyzing Your Style</h1>
-          <p className="text-gray-600 mb-8">{message}</p>
+          <p className="text-gray-600 mb-4">{message}</p>
+          {detailedProgress && (
+            <p className="text-sm text-gray-500 mb-4 italic">{detailedProgress}</p>
+          )}
           <div className="w-full bg-gray-200 rounded-full h-2">
             <div
               className="bg-gray-900 h-2 rounded-full transition-all duration-300"
@@ -189,6 +307,15 @@ const Onboarding: React.FC = () => {
             />
           </div>
           <p className="text-sm text-gray-500 mt-4">{Math.round(progress)}%</p>
+          
+          {/* Show helpful tip during analysis */}
+          {progress >= 30 && progress < 50 && (
+            <div className="mt-8 p-4 bg-gray-50 rounded-lg text-left">
+              <p className="text-xs text-gray-600">
+                <strong>Did you know?</strong> We're analyzing each image individually to understand your unique style patterns, color preferences, and garment choices.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     );

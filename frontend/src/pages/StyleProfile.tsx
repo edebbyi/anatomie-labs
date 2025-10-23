@@ -1,398 +1,348 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Palette, Loader, Plus, Upload, Tag, Sparkles, Edit2, Save, X as XIcon } from 'lucide-react';
-import axios from 'axios';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Upload, X, Tag, Image as ImageIcon, Plus, Loader } from 'lucide-react';
 import authAPI from '../services/authAPI';
 
-interface StyleData {
-  dominantColors: string[];
-  styleTags: string[];
-  materials: string[];
-  silhouettes: string[];
-  aesthetic: string;
+interface StyleLabel {
+  name: string;
+  score: number;
+  count?: number;
+}
+
+interface Distribution {
+  [key: string]: number;
 }
 
 interface PortfolioImage {
   id: string;
+  filename: string;
   url: string;
-  timestamp: Date;
+  width: number;
+  height: number;
+  uploaded_at: string;
+}
+
+interface StyleProfile {
+  id: string;
+  portfolioId: string;
+  styleLabels: StyleLabel[];
+  clusters: any[];
+  summaryText: string;
+  totalImages: number;
+  distributions: {
+    garments: Distribution;
+    colors: Distribution;
+    fabrics: Distribution;
+    silhouettes: Distribution;
+  };
+  portfolioImages: PortfolioImage[];
+  updatedAt: string;
 }
 
 const StyleProfile: React.FC = () => {
+  const navigate = useNavigate();
+  const [profile, setProfile] = useState<StyleProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
-  const [editingTags, setEditingTags] = useState(false);
-  const [newTag, setNewTag] = useState('');
-  const [profile, setProfile] = useState<StyleData>({
-    dominantColors: [],
-    styleTags: [],
-    materials: [],
-    silhouettes: [],
-    aesthetic: '',
-  });
-  const [portfolioImages, setPortfolioImages] = useState<PortfolioImage[]>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [selectedImage, setSelectedImage] = useState<PortfolioImage | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+  const currentUser = authAPI.getCurrentUser();
+  const token = authAPI.getToken();
+  const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
 
   useEffect(() => {
+    if (!currentUser) {
+      navigate('/signup');
+      return;
+    }
     loadProfile();
-  }, []);
+  }, [currentUser, navigate]);
 
   const loadProfile = async () => {
+    setLoading(true);
+    setError(null);
+    
     try {
-      const currentUser = localStorage.getItem('currentUser');
-      const userId = currentUser ? JSON.parse(currentUser).id : null;
-      
-      if (!userId) {
-        setLoading(false);
-        return;
+      const response = await fetch(`${apiUrl}/podna/profile`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          setError('No style profile found. Please upload a portfolio first.');
+          setLoading(false);
+          return;
+        }
+        throw new Error('Failed to load profile');
       }
 
-      const token = authAPI.getToken();
+      const result = await response.json();
       
-      // Load enriched style profile from Node service (style clustering)
-      try {
-        const profileResponse = await fetch(`${API_URL}/style-clustering/profile/${userId}`);
-        
-        if (profileResponse.ok) {
-          const result = await profileResponse.json();
-          console.log('🎨 Style profile (node):', result);
-          
-          if (result.success && result.data) {
-            const prof = result.data;
-            setProfile({
-              dominantColors: prof.signature_elements?.colors || [],
-              styleTags: prof.style_tags || [],
-              materials: prof.signature_elements?.materials || [],
-              silhouettes: prof.signature_elements?.silhouettes || [],
-              aesthetic: prof.insights?.dominantStyle || (prof.style_tags?.[0] || 'Contemporary'),
-            });
-          }
-        }
-      } catch (err) {
-        console.log('No style profile found:', err);
+      if (result.success && result.data?.profile) {
+        setProfile(result.data.profile);
       }
-      
-      // Load portfolio images
-      try {
-        const portfolioResponse = await fetch(`${API_URL}/agents/portfolio/${userId}`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        
-        if (portfolioResponse.ok) {
-          const result = await portfolioResponse.json();
-          console.log('🖼️ Portfolio:', result);
-          
-          if (result.success && result.data.images) {
-            const images = result.data.images.map((img: any) => ({
-              id: img.id,
-              url: img.url,
-              timestamp: new Date(img.created_at || Date.now())
-            }));
-            setPortfolioImages(images);
-          }
-        }
-      } catch (err) {
-        console.log('No portfolio found:', err);
-      }
-    } catch (error) {
-      console.error('Error loading profile:', error);
+    } catch (err: any) {
+      console.error('Error loading profile:', err);
+      setError(err.message || 'Failed to load profile');
     } finally {
       setLoading(false);
     }
   };
-  
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    
+
+  const handleAddImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !profile) return;
+
+    if (!file.name.endsWith('.zip')) {
+      setError('Please upload a ZIP file');
+      return;
+    }
+
     setUploading(true);
-    
+    setError(null);
+
     try {
-      const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      const userId = currentUser.id;
-      const token = authAPI.getToken();
-      
-      // Upload to R2 first
       const formData = new FormData();
-      Array.from(files).forEach(file => formData.append('images', file));
-      
-      const uploadResponse = await fetch(`${API_URL}/images/upload`, {
+      formData.append('portfolio', file);
+
+      const response = await fetch(`${apiUrl}/podna/portfolio/${profile.portfolioId}/add-images`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
         body: formData
       });
-      
-      if (!uploadResponse.ok) throw new Error('Upload failed');
-      
-      const uploadResult = await uploadResponse.json();
-      const imageUrls = uploadResult.urls;
-      
-      console.log('⬆️ Uploaded images:', imageUrls);
-      
-      // Add to portfolio and re-analyze
-      const analyzeResponse = await fetch(`${API_URL}/agents/portfolio/analyze`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          designer_id: userId,
-          image_urls: imageUrls
-        })
-      });
-      
-      if (analyzeResponse.ok) {
-        console.log('✅ Portfolio updated and re-analyzed');
-        // Reload profile
-        await loadProfile();
+
+      const result = await response.json();
+
+      if (!result.success) {
+        throw new Error(result.message || 'Failed to add images');
       }
-    } catch (error) {
-      console.error('❌ Upload failed:', error);
-      alert('Failed to upload images. Please try again.');
+
+      // Reload profile to show new images
+      await loadProfile();
+
+      // Show success message
+      alert(`Successfully added ${result.data.addedCount} new images!`);
+    } catch (err: any) {
+      console.error('Error adding images:', err);
+      setError(err.message || 'Failed to add images');
     } finally {
       setUploading(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
     }
   };
-  
-  const addTag = () => {
-    if (newTag.trim() && !profile.styleTags.includes(newTag.trim())) {
-      setProfile({
-        ...profile,
-        styleTags: [...profile.styleTags, newTag.trim()]
-      });
-      setNewTag('');
-    }
-  };
-  
-  const removeTag = (tagToRemove: string) => {
-    setProfile({
-      ...profile,
-      styleTags: profile.styleTags.filter(tag => tag !== tagToRemove)
-    });
-  };
-  
-  const saveTags = async () => {
-    try {
-      const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      const userId = currentUser.id;
-      const token = authAPI.getToken();
-      
-      // Update style profile with new tags
-      const response = await fetch(`${API_URL}/agents/profile/${userId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          style_tags: profile.styleTags
-        })
-      });
-      
-      if (response.ok) {
-        console.log('✅ Tags updated');
-        setEditingTags(false);
-      } else {
-        console.error('❌ Failed to update tags');
-        alert('Failed to save tags');
-      }
-    } catch (error) {
-      console.error('❌ Error saving tags:', error);
-      alert('Failed to save tags');
-    }
+
+  const getTopDistribution = (dist: Distribution, limit = 5) => {
+    return Object.entries(dist)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([key, value]) => ({
+        label: key,
+        percentage: Math.round(value * 100)
+      }));
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
+      <div className="flex items-center justify-center min-h-screen">
         <Loader className="w-12 h-12 text-gray-900 animate-spin" />
       </div>
     );
   }
 
+  if (error && !profile) {
+    return (
+      <div className="min-h-screen bg-white p-8">
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
+            <p className="text-red-600 mb-4">{error}</p>
+            <button
+              onClick={() => navigate('/onboarding')}
+              className="px-6 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800"
+            >
+              Upload Portfolio
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!profile) return null;
+
   return (
     <div className="min-h-screen bg-white p-8">
-      <div className="max-w-6xl mx-auto">
-        <div className="mb-12">
-          <h1 className="text-5xl font-light text-gray-900 mb-2">Style Profile</h1>
-          <p className="text-gray-600">Your AI-analyzed fashion style</p>
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="mb-8">
+          <h1 className="text-4xl font-light text-gray-900 mb-2">Your Style Profile</h1>
+          <p className="text-gray-600">{profile.summaryText}</p>
         </div>
 
-        {/* Style Tags */}
-        <div className="bg-white border border-gray-200 rounded-lg p-8 mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <Tag className="w-6 h-6 text-gray-900" />
-              <h2 className="text-2xl font-medium text-gray-900">Style Tags</h2>
-            </div>
-            {!editingTags ? (
-              <button
-                onClick={() => setEditingTags(true)}
-                className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                <Edit2 className="w-4 h-4" />
-                Edit
-              </button>
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-sm text-red-600">{error}</p>
+          </div>
+        )}
+
+        {/* Style Labels */}
+        <div className="mb-8">
+          <h2 className="text-2xl font-light text-gray-900 mb-4 flex items-center">
+            <Tag className="w-6 h-6 mr-2" />
+            Style Tags
+          </h2>
+          <div className="flex flex-wrap gap-3">
+            {profile.styleLabels && profile.styleLabels.length > 0 ? (
+              profile.styleLabels.map((label, idx) => (
+                <span
+                  key={idx}
+                  className="px-4 py-2 bg-gray-900 text-white rounded-full text-sm"
+                >
+                  {label.name}
+                </span>
+              ))
             ) : (
-              <button
-                onClick={saveTags}
-                className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-900 text-white hover:bg-gray-800 rounded-lg transition-colors"
-              >
-                <Save className="w-4 h-4" />
-                Save
-              </button>
+              <p className="text-gray-400">No style tags available yet</p>
             )}
           </div>
-          
-          {profile.styleTags.length > 0 ? (
-            <div className="flex flex-wrap gap-3 mb-4">
-              {profile.styleTags.map((tag, idx) => (
-                <span key={idx} className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm flex items-center gap-2">
-                  {tag}
-                  {editingTags && (
-                    <button
-                      onClick={() => removeTag(tag)}
-                      className="hover:bg-white/20 rounded-full p-0.5"
-                    >
-                      <XIcon className="w-3 h-3" />
-                    </button>
-                  )}
-                </span>
-              ))}
-            </div>
-          ) : (
-            <p className="text-gray-400 mb-4">No style tags yet. Add some below.</p>
-          )}
-          
-          {editingTags && (
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={newTag}
-                onChange={(e) => setNewTag(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && addTag()}
-                placeholder="Add a style tag..."
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900"
-              />
-              <button
-                onClick={addTag}
-                className="px-4 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200 rounded-lg transition-colors"
-              >
-                Add
-              </button>
-            </div>
-          )}
         </div>
 
-        {/* Colors */}
-        {profile.dominantColors.length > 0 && (
-          <div className="bg-white border border-gray-200 rounded-lg p-8 mb-6">
-            <div className="flex items-center gap-3 mb-4">
-              <Palette className="w-6 h-6 text-gray-900" />
-              <h2 className="text-2xl font-medium text-gray-900">Color Palette</h2>
-            </div>
-            <div className="flex flex-wrap gap-4">
-              {profile.dominantColors.map((color, idx) => (
-                <div key={idx} className="flex flex-col items-center gap-2">
-                  <div
-                    className="w-20 h-20 rounded-lg border border-gray-300 shadow-sm"
-                    style={{ backgroundColor: color }}
-                  />
-                  <p className="text-sm text-gray-600">{color}</p>
+        {/* Distributions */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          {/* Garments */}
+          <div className="bg-gray-50 rounded-lg p-6">
+            <h3 className="font-semibold text-gray-900 mb-4">Top Garments</h3>
+            <div className="space-y-2">
+              {getTopDistribution(profile.distributions.garments, 3).map((item, idx) => (
+                <div key={idx} className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600 capitalize">{item.label}</span>
+                  <span className="text-sm font-semibold text-gray-900">{item.percentage}%</span>
                 </div>
               ))}
             </div>
           </div>
-        )}
 
-        {/* Materials */}
-        {profile.materials.length > 0 && (
-          <div className="bg-white border border-gray-200 rounded-lg p-8 mb-6">
-            <h2 className="text-2xl font-medium text-gray-900 mb-6">Materials</h2>
-            <div className="flex flex-wrap gap-3">
-              {profile.materials.map((mat, idx) => (
-                <span key={idx} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm">
-                  {mat}
-                </span>
+          {/* Colors */}
+          <div className="bg-gray-50 rounded-lg p-6">
+            <h3 className="font-semibold text-gray-900 mb-4">Top Colors</h3>
+            <div className="space-y-2">
+              {getTopDistribution(profile.distributions.colors, 3).map((item, idx) => (
+                <div key={idx} className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600 capitalize">{item.label}</span>
+                  <span className="text-sm font-semibold text-gray-900">{item.percentage}%</span>
+                </div>
               ))}
             </div>
           </div>
-        )}
 
-        {/* Silhouettes */}
-        {profile.silhouettes.length > 0 && (
-          <div className="bg-white border border-gray-200 rounded-lg p-8 mb-6">
-            <h2 className="text-2xl font-medium text-gray-900 mb-6">Silhouettes</h2>
-            <div className="flex flex-wrap gap-3">
-              {profile.silhouettes.map((sil, idx) => (
-                <span key={idx} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm">
-                  {sil}
-                </span>
+          {/* Fabrics */}
+          <div className="bg-gray-50 rounded-lg p-6">
+            <h3 className="font-semibold text-gray-900 mb-4">Top Fabrics</h3>
+            <div className="space-y-2">
+              {getTopDistribution(profile.distributions.fabrics, 3).map((item, idx) => (
+                <div key={idx} className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600 capitalize">{item.label}</span>
+                  <span className="text-sm font-semibold text-gray-900">{item.percentage}%</span>
+                </div>
               ))}
             </div>
           </div>
-        )}
 
-        {/* Portfolio Gallery */}
-        <div className="bg-white border border-gray-200 rounded-lg p-8 mb-6">
+          {/* Silhouettes */}
+          <div className="bg-gray-50 rounded-lg p-6">
+            <h3 className="font-semibold text-gray-900 mb-4">Top Silhouettes</h3>
+            <div className="space-y-2">
+              {getTopDistribution(profile.distributions.silhouettes, 3).map((item, idx) => (
+                <div key={idx} className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600 capitalize">{item.label}</span>
+                  <span className="text-sm font-semibold text-gray-900">{item.percentage}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Portfolio Images */}
+        <div className="mb-8">
           <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <Sparkles className="w-6 h-6 text-gray-900" />
-              <h2 className="text-2xl font-medium text-gray-900">Portfolio</h2>
-            </div>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors disabled:opacity-50"
-            >
+            <h2 className="text-2xl font-light text-gray-900 flex items-center">
+              <ImageIcon className="w-6 h-6 mr-2" />
+              Portfolio Images ({profile.portfolioImages?.length || 0})
+            </h2>
+            
+            {/* Add Images Button */}
+            <label className="px-6 py-3 bg-gray-900 text-white rounded-lg hover:bg-gray-800 cursor-pointer flex items-center gap-2">
               {uploading ? (
-                <Loader className="w-4 h-4 animate-spin" />
+                <>
+                  <Loader className="w-5 h-5 animate-spin" />
+                  Adding...
+                </>
               ) : (
-                <Plus className="w-4 h-4" />
+                <>
+                  <Plus className="w-5 h-5" />
+                  Add More Images
+                </>
               )}
-              {uploading ? 'Uploading...' : 'Add Images'}
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="image/*"
-              onChange={handleFileSelect}
-              className="hidden"
-            />
+              <input
+                type="file"
+                accept=".zip"
+                onChange={handleAddImages}
+                className="hidden"
+                disabled={uploading}
+              />
+            </label>
           </div>
-          
-          {portfolioImages.length > 0 ? (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {portfolioImages.map((img) => (
-                <div key={img.id} className="aspect-square bg-gray-100 rounded-lg overflow-hidden">
+
+          {profile.portfolioImages && profile.portfolioImages.length > 0 ? (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+              {profile.portfolioImages.map((image) => (
+                <div
+                  key={image.id}
+                  className="aspect-square bg-gray-100 rounded-lg overflow-hidden cursor-pointer hover:ring-2 hover:ring-gray-900 transition-all"
+                  onClick={() => setSelectedImage(image)}
+                >
                   <img
-                    src={img.url}
-                    alt="Portfolio image"
+                    src={image.url}
+                    alt={image.filename}
                     className="w-full h-full object-cover"
                   />
                 </div>
               ))}
             </div>
           ) : (
-            <div className="text-center py-16 border-2 border-dashed border-gray-300 rounded-lg">
-              <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-400 text-lg mb-2">No portfolio images yet</p>
-              <p className="text-gray-500 text-sm">Click "Add Images" to upload your designs</p>
+            <div className="text-center py-16 bg-gray-50 rounded-lg">
+              <ImageIcon className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+              <p className="text-gray-400">No portfolio images found</p>
             </div>
           )}
         </div>
 
-        {profile.styleTags.length === 0 && profile.dominantColors.length === 0 && (
-          <div className="text-center py-16">
-            <p className="text-gray-400 text-lg">
-              Complete onboarding to analyze your style profile
-            </p>
+        {/* Image Lightbox */}
+        {selectedImage && (
+          <div
+            className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-8"
+            onClick={() => setSelectedImage(null)}
+          >
+            <button
+              onClick={() => setSelectedImage(null)}
+              className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white"
+            >
+              <X className="w-6 h-6" />
+            </button>
+
+            <img
+              src={selectedImage.url}
+              alt={selectedImage.filename}
+              className="max-w-full max-h-full object-contain rounded-lg"
+              onClick={(e) => e.stopPropagation()}
+            />
+
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white/80 text-sm">
+              {selectedImage.filename}
+            </div>
           </div>
         )}
       </div>

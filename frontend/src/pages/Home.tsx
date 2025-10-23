@@ -216,7 +216,7 @@ const Home: React.FC = () => {
       
       // Fetch from backend (via Node.js API)
       const token = authAPI.getToken();
-      const response = await fetch(`http://localhost:3001/api/agents/images/${designerId}`, {
+      const response = await fetch(`http://localhost:3001/api/podna/gallery`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -229,14 +229,14 @@ const Home: React.FC = () => {
       const result = await response.json();
       console.log('📸 Images API response for user:', designerId, result);
       
-      if (result.success && result.images && result.images.length > 0) {
-        const loadedImages: GeneratedImage[] = result.images.map((img: any) => {
+      if (result.success && result.data && result.data.generations && result.data.generations.length > 0) {
+        const loadedImages: GeneratedImage[] = result.data.generations.map((img: any) => {
           console.log('🖼️ Processing image:', img);
-          const timestamp = img.created_at ? new Date(img.created_at) : (img.timestamp ? new Date(img.timestamp) : new Date());
+          const timestamp = img.createdAt ? new Date(img.createdAt) : new Date();
           return {
-            id: img.image_id || img.id || `img-${Date.now()}-${Math.random()}`,
-            url: img.url || img.image_url,
-            prompt: img.prompt || 'AI generated from your style profile',
+            id: img.id || `img-${Date.now()}-${Math.random()}`,
+            url: img.url,
+            prompt: img.promptText || 'AI generated from your style profile',
             timestamp: timestamp
           };
         });

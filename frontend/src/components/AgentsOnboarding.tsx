@@ -72,6 +72,7 @@ const AgentsOnboarding: React.FC = () => {
 
     // Check AI agents system
     checkAgentsSystem();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigate]);
   
   // Auto-trigger generation when reaching step 4
@@ -79,6 +80,7 @@ const AgentsOnboarding: React.FC = () => {
     if (currentStep === 4 && styleProfile && !isProcessing && generatedImages.length === 0) {
       generateFirstImages();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStep, styleProfile]);
 
   const checkAgentsSystem = async () => {
@@ -268,7 +270,7 @@ const AgentsOnboarding: React.FC = () => {
         }
         
         // Small delay between generations
-        if (i < prompts.length - 1) {
+        if (i < queries.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
       }
@@ -486,7 +488,7 @@ const AgentsOnboarding: React.FC = () => {
                         <div>
                           <p className="font-medium">Signature Colors:</p>
                           <div className="flex gap-1 mt-1">
-                            {(styleProfile.signature_elements?.colors || []).slice(0, 3).map((color, i) => (
+                            {(styleProfile.signature_elements?.colors || []).slice(0, 3).map((color: string, i: number) => (
                               <div key={i} className="w-4 h-4 rounded" style={{ backgroundColor: color }} />
                             ))}
                           </div>
@@ -532,7 +534,7 @@ const AgentsOnboarding: React.FC = () => {
                         <div key={image.id} className="relative">
                           <img
                             src={image.url}
-                            alt={image.prompt}
+                            alt="Generated design"
                             className="w-full h-40 object-cover rounded-lg"
                           />
                           <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white p-2 rounded-b-lg">

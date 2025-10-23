@@ -3,7 +3,7 @@
  * Communicates with the Python FastAPI agents service
  */
 
-import axios, { AxiosResponse } from 'axios';
+import axios from 'axios';
 
 const AGENTS_API_URL = process.env.REACT_APP_AGENTS_API_URL || 'http://localhost:8000';
 

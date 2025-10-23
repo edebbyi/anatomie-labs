@@ -28,6 +28,7 @@ const generationRoutes = require('./src/routes/generation');
 const rlhfRoutes = require('./src/api/routes/rlhf');
 const styleClusteringRoutes = require('./src/routes/styleClusteringRoutes');
 const agentsRoutes = require('./src/api/routes/agents');
+const podnaRoutes = require('./src/api/routes/podna');
 
 // CORS configuration - Allow multiple frontend ports
 const allowedOrigins = [
@@ -103,6 +104,7 @@ app.use('/api/generate', generationRoutes);
 app.use('/api/rlhf', rlhfRoutes); // RLHF feedback and weight management
 app.use('/api/style-clustering', styleClusteringRoutes); // Style clustering and Pinecone integration
 app.use('/api/agents', agentsRoutes); // AI Agents multi-agent system
+app.use('/api/podna', podnaRoutes); // Podna simplified agent system
 
 // Health check endpoint
 app.get('/health', async (req, res) => {
