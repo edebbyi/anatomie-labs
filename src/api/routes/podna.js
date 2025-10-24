@@ -239,7 +239,7 @@ router.post('/profile/generate/:portfolioId', authMiddleware, asyncHandler(async
 
   try {
     // Generate with Trend Analysis Agent
-    const profile = await trendAnalysisAgent.generateStyleProfile(userId, portfolioId);
+    const profile = await trendAnalysisAgent.generateEnhancedStyleProfile(userId, portfolioId);
 
     res.json({
       success: true,
@@ -728,7 +728,7 @@ router.post('/onboard', authMiddleware, upload.single('portfolio'), asyncHandler
   const zipBuffer = req.file.buffer;
   const filename = req.file.originalname;
   const generateInitial = req.body.generateInitial === 'true';
-  const initialCount = parseInt(req.body.initialCount) || 10;
+  const initialCount = parseInt(req.body.initialCount) || 5;
 
   logger.info('Podna: Starting complete onboarding', { userId, filename, generateInitial });
 
@@ -795,8 +795,10 @@ router.post('/onboard', authMiddleware, upload.single('portfolio'), asyncHandler
     let generations = [];
     if (generateInitial) {
       logger.info('Podna Onboarding: Step 4/4 - Generating initial images');
+      // Use imagen-4-ultra provider as specified in memory notes
       generations = await imageGenerationAgent.generateBatch(userId, initialCount, { 
-        mode: 'exploratory' 
+        mode: 'exploratory',
+        provider: 'imagen-4-ultra'
       });
       
       // Track initial generation interaction (non-blocking)
@@ -804,7 +806,8 @@ router.post('/onboard', authMiddleware, upload.single('portfolio'), asyncHandler
         event_type: 'initial_generation',
         metadata: {
           count: initialCount,
-          actualCount: generations.length
+          actualCount: generations.length,
+          provider: 'imagen-4-ultra'
         }
       }).catch(err => {
         logger.warn('Failed to track initial generation interaction', { error: err.message });

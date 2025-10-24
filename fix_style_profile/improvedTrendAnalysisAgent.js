@@ -487,26 +487,6 @@ class ImprovedTrendAnalysisAgent {
   }
 
   /**
-   * Get user style profile
-   */
-  async getStyleProfile(userId) {
-    const query = `
-      SELECT * FROM style_profiles
-      WHERE user_id = $1
-    `;
-
-    const result = await db.query(query, [userId]);
-    return result.rows[0] || null;
-  }
-
-  /**
-   * Generate style profile (alias for generateEnhancedStyleProfile for compatibility)
-   */
-  async generateStyleProfile(userId, portfolioId) {
-    return this.generateEnhancedStyleProfile(userId, portfolioId);
-  }
-
-  /**
    * Save enhanced profile
    */
   async saveEnhancedProfile(userId, portfolioId, data) {

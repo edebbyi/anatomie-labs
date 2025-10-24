@@ -1,3 +1,10 @@
+/**
+ * ENHANCED Voice Routes
+ * 
+ * This file shows the key changes needed to integrate specificity analysis.
+ * Copy the parseVoiceCommand function and imports to your existing voice.js
+ */
+
 const express = require('express');
 const multer = require('multer');
 const { asyncHandler } = require('../../middleware/errorHandler');
@@ -212,7 +219,7 @@ router.post('/process-audio', upload.single('audio'), asyncHandler(async (req, r
 
 /**
  * GET /api/voice/commands/examples
- * Get example voice commands
+ * Get example voice commands (keep existing)
  */
 router.get('/commands/examples', asyncHandler(async (req, res) => {
   const examples = [
@@ -324,19 +331,18 @@ async function parseVoiceCommand(command, userId = null) {
         ].filter(Boolean);
         
         // ========== NEW: PASS SPECIFICITY ANALYSIS TO PROMPT BUILDER ==========
-        const generatedPrompt = await IntelligentPromptBuilder.generatePrompt(userId, {
-          garmentType: normalizedGarmentType,
-          season: null,
-          occasion: null,
+        const promptBuilderAgent = IntelligentPromptBuilder || require('../../services/IntelligentPromptBuilder');
+        const generatedPrompt = promptBuilderAgent.generatePrompt(styleProfile, {
+          index: 0,
+          exploreMode: specificityAnalysis.mode === 'exploratory',
           creativity: specificityAnalysis.creativityTemp,              // NEW
-          useCache: true,
-          variationSeed: Date.now() % 1000,
-          userModifiers: userModifiers.length > 0 ? userModifiers : undefined
+          respectUserIntent: specificityAnalysis.specificityScore > 0.6, // NEW
+          userModifiers
         });
         // =====================================================================
         
-        enhancedPrompt = generatedPrompt.positive_prompt;
-        negativePrompt = generatedPrompt.negative_prompt;
+        enhancedPrompt = generatedPrompt.mainPrompt;
+        negativePrompt = generatedPrompt.negativePrompt;
         
         logger.info('Voice command enhanced with user style profile', {
           userId,

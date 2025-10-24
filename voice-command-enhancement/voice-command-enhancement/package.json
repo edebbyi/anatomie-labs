@@ -1,0 +1,35 @@
+{
+  "name": "voice-command-specificity-enhancement",
+  "version": "1.0.0",
+  "description": "Intelligent specificity-aware creativity control for AI fashion design system voice commands",
+  "main": "services/specificityAnalyzer.js",
+  "scripts": {
+    "test": "node examples/test_cases.js"
+  },
+  "keywords": [
+    "voice-commands",
+    "ai",
+    "fashion",
+    "design",
+    "specificity-analysis",
+    "creativity-control",
+    "trend-suggestions"
+  ],
+  "author": "Your Fashion AI Team",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "express": "^4.18.0",
+    "multer": "^1.4.0"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "files": [
+    "services/",
+    "examples/",
+    "README_IMPLEMENTATION.md",
+    "QUICKSTART.md"
+  ]
+}

@@ -1,11 +1,13 @@
 /**
- * Intelligent Prompt Builder - FIXED VERSION
+ * Intelligent Prompt Builder
  * 
- * FIXES:
- * 1. Correct prompt order: Style → Garment → Color → Model/Pose → Accessories → Lighting → Camera
- * 2. Learns shot types from portfolio analysis
- * 3. Ensures front-facing poses by default
- * 4. Includes model/pose information in prompts
+ * Unified prompt generation system that:
+ * - Uses ultra-detailed ingestion data (150+ attributes)
+ * - Thompson Sampling for learning what works
+ * - In-memory caching for performance
+ * - Generates precise, weighted prompts
+ * 
+ * Replaces: advancedPromptBuilderAgent.js + promptGeneratorAgent.js
  */
 
 const db = require('./database');
@@ -36,13 +38,16 @@ class IntelligentPromptBuilder {
       'bad anatomy', 'disfigured', 'poorly drawn', 'extra limbs',
       'missing limbs', 'floating limbs', 'disconnected limbs',
       'mutation', 'mutated', 'ugly', 'disgusting', 'amputation',
-      'watermark', 'signature', 'text', 'logo',
-      'back view', 'rear view', 'turned away' // ADDED: Avoid non-front-facing poses
+      'watermark', 'signature', 'text', 'logo'
     ].join(', ');
   }
 
   /**
    * Generate prompt using ultra-detailed data + Thompson Sampling
+   * 
+   * @param {string} userId - User ID
+   * @param {Object} options - Generation options
+   * @returns {Promise<Object>} { positive_prompt, negative_prompt, metadata }
    */
   async generatePrompt(userId, options = {}) {
     const {
@@ -162,7 +167,6 @@ class IntelligentPromptBuilder {
 
   /**
    * Build detailed prompt using Thompson Sampling
-   * ORDER: Style → Garment → Color → Model/Pose → Accessories → Lighting → Camera
    */
   async buildDetailedPrompt(descriptors, thompsonParams, creativity, options) {
     // Aggregate preferences from descriptors
@@ -171,135 +175,91 @@ class IntelligentPromptBuilder {
     // Sample attributes using Thompson Sampling
     const selected = this.thompsonSample(preferences, thompsonParams, creativity);
 
-    // Build weighted prompt components in CORRECT ORDER
+    // Build weighted prompt components
     const components = [];
 
-    // 1. STYLE CONTEXT (from cluster mode if available)
-    if (selected.styleContext) {
-      components.push(this.formatToken(`in the user's signature '${selected.styleContext}' mode:`, 1.2));
-    }
-
-    // 2. PRIMARY GARMENT (highest weight)
+    // 1. PRIMARY GARMENT (highest weight)
     if (selected.garment) {
-      // Build comprehensive garment description
-      const garmentParts = [];
+      components.push(this.formatToken(selected.garment.description, 1.3));
       
-      // Silhouette first (if available)
-      if (selected.garment.silhouette) {
-        garmentParts.push(selected.garment.silhouette);
-      }
-      
-      // Fit
+      // Add fit/silhouette
       if (selected.garment.fit) {
-        garmentParts.push(selected.garment.fit);
+        components.push(this.formatToken(selected.garment.fit, 1.2));
       }
       
-      // Garment type
-      garmentParts.push(selected.garment.type);
+      // Add length
+      if (selected.garment.length) {
+        components.push(this.formatToken(selected.garment.length, 1.2));
+      }
       
-      const garmentDesc = garmentParts.join(', ');
-      components.push(this.formatToken(garmentDesc, 1.3));
-      
-      // Add specific construction details
-      if (selected.garment.details && selected.garment.details.length > 0) {
-        for (const detail of selected.garment.details.slice(0, 2)) {
+      // Add specific details
+      if (selected.garment.details) {
+        for (const detail of selected.garment.details) {
           components.push(this.formatToken(detail, 1.1));
         }
       }
     }
 
-    // 3. FABRIC & MATERIAL (high weight)
+    // 2. FABRIC & MATERIAL (high weight)
     if (selected.fabric) {
-      const fabricDesc = selected.fabric.finish 
-        ? `in ${selected.fabric.material} fabric, with ${selected.fabric.finish} finish`
-        : `in ${selected.fabric.material} fabric`;
+      components.push(this.formatToken(selected.fabric.material, 1.2));
       
-      components.push(this.formatToken(fabricDesc, 1.2));
+      if (selected.fabric.texture) {
+        components.push(this.formatToken(selected.fabric.texture, 1.1));
+      }
+      
+      if (selected.fabric.drape) {
+        components.push(this.formatToken(selected.fabric.drape, 1.1));
+      }
+      
+      if (selected.fabric.finish) {
+        components.push(this.formatToken(selected.fabric.finish, 1.0));
+      }
     }
 
-    // 4. COLORS (very high weight - critical for fashion)
+    // 3. COLORS (very high weight - critical for fashion)
     if (selected.colors && selected.colors.length > 0) {
-      const colorList = selected.colors.map(c => c.name).join(' and ');
-      components.push(this.formatToken(`${colorList} palette`, 1.3));
-    }
-
-    // 5. MODEL & POSE (NEW - CRITICAL FOR SHOT CONSISTENCY)
-    if (selected.pose) {
-      // Shot type (learned from portfolio)
-      const shotType = selected.pose.shot_type || 'three-quarter length shot';
-      components.push(this.formatToken(shotType, 1.3));
-      
-      // Body position - ALWAYS front-facing unless user portfolio shows otherwise
-      const bodyPosition = selected.pose.body_position || 'standing front-facing';
-      components.push(this.formatToken(bodyPosition, 1.2));
-      
-      // Pose details
-      if (selected.pose.pose_style) {
-        components.push(this.formatToken(selected.pose.pose_style, 1.1));
-      }
-    } else {
-      // DEFAULT: Always front-facing if no learned pose data
-      components.push(this.formatToken('three-quarter length shot', 1.3));
-      components.push(this.formatToken('model facing camera', 1.3));
-      components.push(this.formatToken('front-facing pose', 1.2));
-    }
-
-    // 6. ACCESSORIES (if any)
-    if (selected.accessories && selected.accessories.length > 0) {
-      for (const accessory of selected.accessories.slice(0, 2)) {
-        components.push(this.formatToken(accessory, 1.0));
+      for (const color of selected.colors) {
+        // Include hex code for precision
+        const colorDesc = color.hex ? `${color.name} ${color.hex}` : color.name;
+        components.push(this.formatToken(colorDesc, 1.3));
+        
+        // Add placement if specified
+        if (color.placement) {
+          components.push(this.formatToken(color.placement, 1.1));
+        }
       }
     }
 
-    // 7. LIGHTING (medium-high weight)
-    if (selected.photography && selected.photography.lighting) {
-      const lightingDesc = selected.photography.lighting_direction 
-        ? `${selected.photography.lighting} from ${selected.photography.lighting_direction}`
-        : selected.photography.lighting;
-      
-      components.push(this.formatToken(lightingDesc, 1.1));
-    } else {
-      components.push(this.formatToken('soft lighting from front', 1.1));
+    // 4. CONSTRUCTION DETAILS (medium-high weight)
+    if (selected.construction) {
+      for (const detail of selected.construction) {
+        components.push(this.formatToken(detail, 1.1));
+      }
     }
 
-    // 8. CAMERA SPECS (medium weight)
+    // 5. LAYERING (if applicable)
+    if (selected.layers && selected.layers.length > 0) {
+      for (const layer of selected.layers) {
+        components.push(this.formatToken(layer, 1.0));
+      }
+    }
+
+    // 6. PHOTOGRAPHY STYLE (medium weight)
     if (selected.photography) {
-      // Camera angle - ALWAYS PREFER FRONT ANGLES
-      let angle = selected.photography.angle || '3/4 front angle';
+      components.push(this.formatToken(selected.photography.shot_type || 'three-quarter length shot', 1.2));
+      components.push(this.formatToken(selected.photography.lighting || 'studio lighting', 1.1));
       
-      // Override side/back angles to front
-      if (angle.includes('side') || angle.includes('back') || angle.includes('profile')) {
-        angle = '3/4 front angle';
-        logger.info('Overriding non-front angle to 3/4 front', { originalAngle: selected.photography.angle });
-      }
-      
-      components.push(this.formatToken(angle, 1.2));
-      
-      // Camera height
-      const height = selected.photography.height || 'eye level';
-      components.push(this.formatToken(`at ${height}`, 1.0));
-      
-      // Background
       if (selected.photography.background) {
-        components.push(this.formatToken(`${selected.photography.background} background`, 1.0));
-      } else {
-        components.push(this.formatToken('clean studio background', 1.0));
+        components.push(this.formatToken(selected.photography.background, 1.0));
       }
-    } else {
-      // DEFAULT camera settings - ALWAYS FRONT-FACING
-      components.push(this.formatToken('3/4 front angle', 1.2));
-      components.push(this.formatToken('at eye level', 1.0));
-      components.push(this.formatToken('clean studio background', 1.0));
+      
+      if (selected.photography.angle) {
+        components.push(this.formatToken(selected.photography.angle, 1.1));
+      }
     }
 
-    // 9. STYLE DESCRIPTOR (if from contextual analysis)
-    if (selected.styleDescriptor) {
-      components.push(this.formatToken(selected.styleDescriptor, 1.0));
-    } else {
-      components.push(this.formatToken('modern editorial style', 1.0));
-    }
-
-    // 10. QUALITY MARKERS (standard weight) - ALWAYS AT END
+    // 7. QUALITY MARKERS (standard weight)
     components.push(this.formatToken('professional fashion photography', 1.3));
     components.push(this.formatToken('high detail', 1.2));
     components.push(this.formatToken('8k', 1.1));
@@ -319,10 +279,7 @@ class IntelligentPromptBuilder {
       token_count: components.length,
       garment_type: selected.garment?.type || 'unknown',
       dominant_colors: selected.colors?.map(c => c.name) || [],
-      fabric: selected.fabric?.material || 'unknown',
-      shot_type: selected.pose?.shot_type || 'three-quarter length shot',
-      camera_angle: selected.photography?.angle || '3/4 front angle',
-      pose_enforced_front_facing: !selected.pose || selected.pose.body_position?.includes('front')
+      fabric: selected.fabric?.material || 'unknown'
     };
 
     return {
@@ -333,7 +290,7 @@ class IntelligentPromptBuilder {
   }
 
   /**
-   * Aggregate preferences from descriptors - UPDATED TO INCLUDE POSE DATA
+   * Aggregate preferences from descriptors
    */
   aggregatePreferences(descriptors) {
     const preferences = {
@@ -342,32 +299,27 @@ class IntelligentPromptBuilder {
       colors: {},
       construction: {},
       photography: {},
-      poses: {}, // NEW: Track poses
-      accessories: {}, // NEW: Track accessories
-      styleContext: {} // NEW: Track style contexts
+      layers: {}
     };
 
     for (const desc of descriptors) {
-      // Parse JSON fields
+      // Parse JSON fields from the correct columns
       const garments = this.safeParseJSON(desc.garments, []);
-      const photography = this.safeParseJSON(desc.photography, {});
-      const stylingContext = this.safeParseJSON(desc.styling_context, {});
-      const contextual = this.safeParseJSON(desc.contextual_attributes, {});
-      
-      // Extract fabric, color, and construction details from garments
       const fabrics = [];
       const colors = [];
       const construction = [];
-      
+      const photography = this.safeParseJSON(desc.photography, {});
+          
+      // Extract fabric, color, and construction details from garments
       for (const garment of garments) {
         if (garment.fabric) {
           fabrics.push(garment.fabric);
         }
-        
+            
         if (garment.color_palette) {
           colors.push(...garment.color_palette);
         }
-        
+            
         if (garment.construction) {
           construction.push(garment.construction);
         }
@@ -384,24 +336,18 @@ class IntelligentPromptBuilder {
 
       // Aggregate fabrics
       for (const fabric of fabrics) {
-        const key = fabric.primary_material || fabric.material || fabric.type;
+        const key = fabric.material || fabric.type;
         if (!preferences.fabrics[key]) {
-          preferences.fabrics[key] = { 
-            count: 0, 
-            data: {
-              material: fabric.primary_material || fabric.material || fabric.type,
-              finish: fabric.sheen || fabric.finish
-            }
-          };
+          preferences.fabrics[key] = { count: 0, data: fabric };
         }
         preferences.fabrics[key].count++;
       }
 
       // Aggregate colors
       for (const color of colors) {
-        const key = color.color_name || color.name || color.hex;
+        const key = color.name || color.hex;
         if (!preferences.colors[key]) {
-          preferences.colors[key] = { count: 0, data: { name: key } };
+          preferences.colors[key] = { count: 0, data: color };
         }
         preferences.colors[key].count++;
       }
@@ -417,69 +363,13 @@ class IntelligentPromptBuilder {
         }
       }
 
-      // NEW: Aggregate poses from photography data
-      if (photography && photography.pose) {
-        const poseKey = this.generatePoseKey(photography);
-        if (!preferences.poses[poseKey]) {
-          preferences.poses[poseKey] = {
-            count: 0,
-            data: {
-              shot_type: photography.shot_composition?.type || 'three-quarter length shot',
-              body_position: this.determineFacingDirection(photography.pose),
-              pose_style: this.describePoseStyle(photography.pose)
-            }
-          };
+      // Aggregate photography
+      if (photography && Object.keys(photography).length > 0) {
+        const key = photography.shot_type || 'default';
+        if (!preferences.photography[key]) {
+          preferences.photography[key] = { count: 0, data: photography };
         }
-        preferences.poses[poseKey].count++;
-      }
-
-      // NEW: Aggregate accessories
-      if (stylingContext && stylingContext.accessories) {
-        const accessories = stylingContext.accessories;
-        for (const [category, items] of Object.entries(accessories)) {
-          if (items && typeof items === 'string' && items !== 'none visible') {
-            const key = `${category}: ${items}`;
-            if (!preferences.accessories[key]) {
-              preferences.accessories[key] = { count: 0, data: items };
-            }
-            preferences.accessories[key].count++;
-          } else if (Array.isArray(items)) {
-            for (const item of items) {
-              const key = `${category}: ${item}`;
-              if (!preferences.accessories[key]) {
-                preferences.accessories[key] = { count: 0, data: item };
-              }
-              preferences.accessories[key].count++;
-            }
-          }
-        }
-      }
-
-      // NEW: Aggregate photography settings
-      if (photography) {
-        const photoKey = this.generatePhotographyKey(photography);
-        if (!preferences.photography[photoKey]) {
-          preferences.photography[photoKey] = {
-            count: 0,
-            data: {
-              lighting: photography.lighting?.type || 'soft lighting',
-              lighting_direction: photography.lighting?.direction || 'front',
-              angle: this.ensureFrontAngle(photography.camera_angle?.horizontal || '3/4 front angle'),
-              height: photography.camera_angle?.vertical || 'eye level',
-              background: photography.background?.type || 'minimal'
-            }
-          };
-        }
-        preferences.photography[photoKey].count++;
-      }
-
-      // NEW: Aggregate style context
-      if (contextual && contextual.mood_aesthetic) {
-        const styleKey = contextual.mood_aesthetic;
-        if (!preferences.styleContext[styleKey]) {
-          preferences.styleContext[styleKey] = { count: 0, data: styleKey };
-        }
-        preferences.styleContext[styleKey].count++;
+        preferences.photography[key].count++;
       }
     }
 
@@ -487,87 +377,7 @@ class IntelligentPromptBuilder {
   }
 
   /**
-   * NEW: Generate pose key for aggregation
-   */
-  generatePoseKey(photography) {
-    const shotType = photography.shot_composition?.type || 'medium';
-    const facing = this.determineFacingDirection(photography.pose);
-    return `${shotType}_${facing}`;
-  }
-
-  /**
-   * NEW: Determine if model is facing camera (front-facing)
-   */
-  determineFacingDirection(pose) {
-    if (!pose) return 'front-facing';
-    
-    const gaze = pose.gaze?.toLowerCase() || '';
-    const head = pose.head?.toLowerCase() || '';
-    const bodyPos = pose.body_position?.toLowerCase() || '';
-    
-    // Check if model is facing camera
-    if (gaze.includes('camera') || head.includes('straight') || bodyPos.includes('front')) {
-      return 'front-facing';
-    }
-    
-    // Check for side/profile poses (we want to avoid these)
-    if (gaze.includes('away') || head.includes('turned') || bodyPos.includes('profile')) {
-      return 'profile'; // Will be overridden to front-facing in prompt building
-    }
-    
-    // Default to front-facing
-    return 'front-facing';
-  }
-
-  /**
-   * NEW: Describe pose style in brief terms
-   */
-  describePoseStyle(pose) {
-    if (!pose) return 'confident pose';
-    
-    const bodyLanguage = pose.body_language?.toLowerCase() || '';
-    const posture = pose.posture?.toLowerCase() || '';
-    
-    if (bodyLanguage.includes('confident')) return 'confident pose';
-    if (bodyLanguage.includes('relaxed')) return 'relaxed pose';
-    if (bodyLanguage.includes('dynamic')) return 'dynamic pose';
-    if (posture.includes('upright')) return 'upright confident pose';
-    
-    return 'confident pose';
-  }
-
-  /**
-   * NEW: Generate photography key for aggregation
-   */
-  generatePhotographyKey(photography) {
-    const lighting = photography.lighting?.type || 'soft';
-    const angle = photography.camera_angle?.horizontal || 'front';
-    return `${lighting}_${angle}`;
-  }
-
-  /**
-   * NEW: Ensure angle is front-facing
-   */
-  ensureFrontAngle(angle) {
-    const angleLower = angle.toLowerCase();
-    
-    // If it's already a front angle, keep it
-    if (angleLower.includes('front') || angleLower.includes('straight-on')) {
-      return angle;
-    }
-    
-    // Override side, back, or profile angles
-    if (angleLower.includes('side') || angleLower.includes('back') || angleLower.includes('profile')) {
-      logger.info('Converting non-front angle to 3/4 front', { originalAngle: angle });
-      return '3/4 front angle';
-    }
-    
-    // Default to 3/4 front
-    return '3/4 front angle';
-  }
-
-  /**
-   * Thompson Sampling selection - UPDATED TO INCLUDE POSE
+   * Thompson Sampling selection
    */
   thompsonSample(preferences, thompsonParams, creativity) {
     const selected = {};
@@ -605,32 +415,10 @@ class IntelligentPromptBuilder {
       3
     );
 
-    // NEW: Sample pose
-    selected.pose = this.sampleCategory(
-      preferences.poses,
-      thompsonParams.poses || {},
-      shouldExplore
-    );
-
-    // NEW: Sample accessories (top 1-2)
-    selected.accessories = this.sampleMultiple(
-      preferences.accessories,
-      thompsonParams.accessories || {},
-      shouldExplore,
-      2
-    );
-
     // Sample photography
     selected.photography = this.sampleCategory(
       preferences.photography,
       thompsonParams.photography || {},
-      shouldExplore
-    );
-
-    // NEW: Sample style context
-    selected.styleContext = this.sampleCategory(
-      preferences.styleContext,
-      thompsonParams.styleContext || {},
       shouldExplore
     );
 
@@ -757,14 +545,8 @@ class IntelligentPromptBuilder {
       this.formatToken(`${garment}`, 1.3),
       this.formatToken(`${fabric}`, 1.2),
       this.formatToken(`${color}`, 1.3),
-      this.formatToken('three-quarter length shot', 1.3),
-      this.formatToken('model facing camera', 1.3),
-      this.formatToken('front-facing pose', 1.2),
       this.formatToken('professional fashion photography', 1.3),
       this.formatToken('studio lighting', 1.1),
-      this.formatToken('3/4 front angle', 1.2),
-      this.formatToken('at eye level', 1.0),
-      this.formatToken('clean studio background', 1.0),
       this.formatToken('high detail', 1.2),
       this.formatToken('8k', 1.1),
       this.formatToken('sharp focus', 1.0)
