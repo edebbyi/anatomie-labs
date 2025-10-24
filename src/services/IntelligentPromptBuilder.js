@@ -161,82 +161,145 @@ class IntelligentPromptBuilder {
   }
 
   /**
-   * Build detailed prompt using Thompson Sampling
+   * Build detailed prompt using Thompson Sampling + Brand DNA
    * ORDER: Style → Garment → Color → Model/Pose → Accessories → Lighting → Camera
+   * 
+   * @param {Array} descriptors - Ultra-detailed descriptors
+   * @param {Object} thompsonParams - Thompson Sampling parameters
+   * @param {number} creativity - Creativity level (0-1)
+   * @param {Object} options - Additional options including brandDNA
+   * @returns {Object} { positive, negative, metadata }
    */
-  async buildDetailedPrompt(descriptors, thompsonParams, creativity, options) {
+  async buildDetailedPrompt(descriptors, thompsonParams, creativity, options = {}) {
+    const { brandDNA, enforceBrandDNA = true, brandDNAStrength = 0.8 } = options;
+    
     // Aggregate preferences from descriptors
     const preferences = this.aggregatePreferences(descriptors);
 
-    // Sample attributes using Thompson Sampling
-    const selected = this.thompsonSample(preferences, thompsonParams, creativity);
+    // Decide: explore or exploit?
+    const shouldExplore = Math.random() < creativity;
 
-    // Build weighted prompt components in CORRECT ORDER
+    // Build components array
     const components = [];
 
-    // 1. STYLE CONTEXT (from cluster mode if available)
-    if (selected.styleContext) {
-      components.push(this.formatToken(`in the user's signature '${selected.styleContext}' mode:`, 1.2));
+    // 1. STYLE CONTEXT - Use brand DNA if available
+    if (brandDNA && brandDNA.primaryAesthetic && enforceBrandDNA) {
+      components.push(
+        this.formatToken(`in the designer's signature '${brandDNA.primaryAesthetic}' aesthetic`, 1.3)
+      );
+    } else if (preferences.styleContext && Object.keys(preferences.styleContext).length > 0) {
+      const selectedStyle = this.sampleCategory(
+        preferences.styleContext,
+        thompsonParams.styleContext || {},
+        shouldExplore
+      );
+      if (selectedStyle) {
+        components.push(this.formatToken(`${selectedStyle} style`, 1.2));
+      }
     }
 
-    // 2. PRIMARY GARMENT (highest weight)
-    if (selected.garment) {
+    // 2. PRIMARY GARMENT - With brand bias
+    const garmentBias = brandDNA && enforceBrandDNA 
+      ? brandDNA.primaryGarments.map(g => g.type)
+      : [];
+    
+    const selectedGarment = this.thompsonSampleWithBias(
+      preferences.garments,
+      thompsonParams.garments || {},
+      garmentBias,
+      shouldExplore,
+      brandDNAStrength + 0.5 // Stronger boost for garments
+    );
+
+    if (selectedGarment) {
       // Build comprehensive garment description
       const garmentParts = [];
       
-      // Silhouette first (if available)
-      if (selected.garment.silhouette) {
-        garmentParts.push(selected.garment.silhouette);
+      if (selectedGarment.silhouette) {
+        garmentParts.push(selectedGarment.silhouette);
       }
       
-      // Fit
-      if (selected.garment.fit) {
-        garmentParts.push(selected.garment.fit);
+      if (selectedGarment.fit) {
+        garmentParts.push(selectedGarment.fit);
       }
       
-      // Garment type
-      garmentParts.push(selected.garment.type);
+      garmentParts.push(selectedGarment.type);
       
       const garmentDesc = garmentParts.join(', ');
       components.push(this.formatToken(garmentDesc, 1.3));
       
-      // Add specific construction details
-      if (selected.garment.details && selected.garment.details.length > 0) {
-        for (const detail of selected.garment.details.slice(0, 2)) {
+      // Add construction details if brand DNA has signature construction
+      if (brandDNA && brandDNA.signatureConstruction && enforceBrandDNA) {
+        const topConstruction = brandDNA.signatureConstruction.slice(0, 2);
+        topConstruction.forEach(detail => {
+          components.push(this.formatToken(detail.detail, 1.1));
+        });
+      } else if (selectedGarment.details && selectedGarment.details.length > 0) {
+        selectedGarment.details.slice(0, 2).forEach(detail => {
           components.push(this.formatToken(detail, 1.1));
-        }
+        });
       }
     }
 
-    // 3. FABRIC & MATERIAL (high weight)
-    if (selected.fabric) {
-      const fabricDesc = selected.fabric.finish 
-        ? `in ${selected.fabric.material} fabric, with ${selected.fabric.finish} finish`
-        : `in ${selected.fabric.material} fabric`;
+    // 3. FABRIC & MATERIAL - With brand bias
+    const fabricBias = brandDNA && enforceBrandDNA
+      ? brandDNA.signatureFabrics.map(f => f.name)
+      : [];
+    
+    const selectedFabric = this.thompsonSampleWithBias(
+      preferences.fabrics,
+      thompsonParams.fabrics || {},
+      fabricBias,
+      shouldExplore,
+      brandDNAStrength
+    );
+
+    if (selectedFabric) {
+      const fabricDesc = selectedFabric.finish 
+        ? `in ${selectedFabric.material} fabric, with ${selectedFabric.finish} finish`
+        : `in ${selectedFabric.material} fabric`;
       
       components.push(this.formatToken(fabricDesc, 1.2));
     }
 
-    // 4. COLORS (very high weight - critical for fashion)
-    if (selected.colors && selected.colors.length > 0) {
-      const colorList = selected.colors.map(c => c.name).join(' and ');
+    // 4. COLORS - Strong brand bias
+    const colorBias = brandDNA && enforceBrandDNA
+      ? brandDNA.signatureColors.map(c => c.name)
+      : [];
+    
+    const selectedColors = this.thompsonSampleMultipleWithBias(
+      preferences.colors,
+      thompsonParams.colors || {},
+      colorBias,
+      shouldExplore,
+      2,
+      brandDNAStrength + 0.3 // Extra strong boost for colors
+    );
+
+    if (selectedColors && selectedColors.length > 0) {
+      const colorList = selectedColors.map(c => c.name || c).join(' and ');
       components.push(this.formatToken(`${colorList} palette`, 1.3));
     }
 
-    // 5. MODEL & POSE (NEW - CRITICAL FOR SHOT CONSISTENCY)
-    if (selected.pose) {
-      // Shot type (learned from portfolio)
-      const shotType = selected.pose.shot_type || 'three-quarter length shot';
-      components.push(this.formatToken(shotType, 1.3));
+    // 5. MODEL & POSE - Use brand DNA photography preferences
+    let selectedPose = null;
+    
+    if (brandDNA && brandDNA.preferredShotTypes && brandDNA.preferredShotTypes.length > 0 && enforceBrandDNA) {
+      // Use learned shot type
+      const preferredShot = brandDNA.preferredShotTypes[0];
+      components.push(this.formatToken(preferredShot.type, 1.3));
       
-      // Body position - ALWAYS front-facing unless user portfolio shows otherwise
-      const bodyPosition = selected.pose.body_position || 'standing front-facing';
-      components.push(this.formatToken(bodyPosition, 1.2));
-      
-      // Pose details
-      if (selected.pose.pose_style) {
-        components.push(this.formatToken(selected.pose.pose_style, 1.1));
+      // Use learned facing direction or default to front
+      if (brandDNA.preferredAngles && brandDNA.preferredAngles.length > 0) {
+        const preferredAngle = brandDNA.preferredAngles[0].angle;
+        components.push(this.formatToken(preferredAngle, 1.2));
+      } else {
+        components.push(this.formatToken('model facing camera', 1.3));
       }
+      
+      // Add confident pose
+      components.push(this.formatToken('confident pose', 1.1));
+      
     } else {
       // DEFAULT: Always front-facing if no learned pose data
       components.push(this.formatToken('three-quarter length shot', 1.3));
@@ -245,62 +308,35 @@ class IntelligentPromptBuilder {
     }
 
     // 6. ACCESSORIES (if any)
-    if (selected.accessories && selected.accessories.length > 0) {
-      for (const accessory of selected.accessories.slice(0, 2)) {
-        components.push(this.formatToken(accessory, 1.0));
-      }
+    const selectedAccessories = this.sampleMultiple(
+      preferences.accessories,
+      thompsonParams.accessories || {},
+      shouldExplore,
+      2
+    );
+    
+    if (selectedAccessories && selectedAccessories.length > 0) {
+      selectedAccessories.forEach(acc => {
+        components.push(this.formatToken(acc, 1.0));
+      });
     }
 
-    // 7. LIGHTING (medium-high weight)
-    if (selected.photography && selected.photography.lighting) {
-      const lightingDesc = selected.photography.lighting_direction 
-        ? `${selected.photography.lighting} from ${selected.photography.lighting_direction}`
-        : selected.photography.lighting;
-      
-      components.push(this.formatToken(lightingDesc, 1.1));
+    // 7. LIGHTING - Use brand DNA or defaults
+    if (brandDNA && brandDNA.preferredLighting && brandDNA.preferredLighting.length > 0 && enforceBrandDNA) {
+      const preferredLighting = brandDNA.preferredLighting[0];
+      components.push(this.formatToken(`${preferredLighting.type} lighting`, 1.1));
     } else {
       components.push(this.formatToken('soft lighting from front', 1.1));
     }
 
-    // 8. CAMERA SPECS (medium weight)
-    if (selected.photography) {
-      // Camera angle - ALWAYS PREFER FRONT ANGLES
-      let angle = selected.photography.angle || '3/4 front angle';
-      
-      // Override side/back angles to front
-      if (angle.includes('side') || angle.includes('back') || angle.includes('profile')) {
-        angle = '3/4 front angle';
-        logger.info('Overriding non-front angle to 3/4 front', { originalAngle: selected.photography.angle });
-      }
-      
-      components.push(this.formatToken(angle, 1.2));
-      
-      // Camera height
-      const height = selected.photography.height || 'eye level';
-      components.push(this.formatToken(`at ${height}`, 1.0));
-      
-      // Background
-      if (selected.photography.background) {
-        components.push(this.formatToken(`${selected.photography.background} background`, 1.0));
-      } else {
-        components.push(this.formatToken('clean studio background', 1.0));
-      }
-    } else {
-      // DEFAULT camera settings - ALWAYS FRONT-FACING
-      components.push(this.formatToken('3/4 front angle', 1.2));
-      components.push(this.formatToken('at eye level', 1.0));
-      components.push(this.formatToken('clean studio background', 1.0));
-    }
+    // 8. CAMERA SPECS
+    components.push(this.formatToken('at eye level', 1.0));
+    components.push(this.formatToken('clean studio background', 1.0));
 
-    // 9. STYLE DESCRIPTOR (if from contextual analysis)
-    if (selected.styleDescriptor) {
-      components.push(this.formatToken(selected.styleDescriptor, 1.0));
-    } else {
-      components.push(this.formatToken('modern editorial style', 1.0));
-    }
-
-    // 10. QUALITY MARKERS (standard weight) - ALWAYS AT END
+    // 9. STYLE DESCRIPTOR
     components.push(this.formatToken('professional fashion photography', 1.3));
+
+    // 10. QUALITY MARKERS (always at end)
     components.push(this.formatToken('high detail', 1.2));
     components.push(this.formatToken('8k', 1.1));
     components.push(this.formatToken('sharp focus', 1.0));
@@ -309,20 +345,36 @@ class IntelligentPromptBuilder {
     // Join all components
     const positivePrompt = components.join(', ');
 
-    // Build negative prompt (user preferences + defaults)
-    const negativePrompt = this.buildNegativePrompt(selected);
+    // Build negative prompt
+    const negativePrompt = this.buildNegativePrompt({});
 
-    // Build metadata for tracking
+    // Calculate brand consistency
+    const selected = {
+      garment: selectedGarment,
+      fabric: selectedFabric,
+      colors: selectedColors,
+      styleContext: brandDNA?.primaryAesthetic,
+      pose: selectedPose,
+      photography: {
+        angle: brandDNA?.preferredAngles?.[0]?.angle
+      }
+    };
+    
+    const brandConsistencyScore = brandDNA && enforceBrandDNA
+      ? this.calculateBrandConsistency(selected, brandDNA)
+      : 0.5;
+
+    // Build metadata
     const metadata = {
       thompson_selection: selected,
       creativity_level: creativity,
       token_count: components.length,
-      garment_type: selected.garment?.type || 'unknown',
-      dominant_colors: selected.colors?.map(c => c.name) || [],
-      fabric: selected.fabric?.material || 'unknown',
-      shot_type: selected.pose?.shot_type || 'three-quarter length shot',
-      camera_angle: selected.photography?.angle || '3/4 front angle',
-      pose_enforced_front_facing: !selected.pose || selected.pose.body_position?.includes('front')
+      brand_dna_applied: !!brandDNA && enforceBrandDNA,
+      brand_consistency_score: brandConsistencyScore,
+      brand_dna_strength: brandDNAStrength,
+      garment_type: selectedGarment?.type || 'unknown',
+      dominant_colors: selectedColors?.map(c => c.name || c) || [],
+      fabric: selectedFabric?.material || 'unknown'
     };
 
     return {
@@ -956,6 +1008,519 @@ class IntelligentPromptBuilder {
     } catch (e) {
       return defaultValue;
     }
+  }
+
+  /**
+   * Extract Brand DNA from enhanced style profile
+   * This creates a distilled representation of the designer's signature
+   * 
+   * @param {Object} styleProfile - Enhanced style profile from TrendAnalysisAgent
+   * @returns {Object} Brand DNA object
+   */
+  extractBrandDNA(styleProfile) {
+    if (!styleProfile) {
+      logger.warn('No style profile provided for brand DNA extraction');
+      return null;
+    }
+
+    try {
+      // 1. PRIMARY AESTHETIC
+      const primaryAesthetic = styleProfile.aesthetic_themes?.[0];
+      const secondaryAesthetics = styleProfile.aesthetic_themes?.slice(1, 3) || [];
+
+      // 2. SIGNATURE COLORS (top 3, weighted by distribution)
+      const signatureColors = this.extractTopDistribution(
+        styleProfile.color_distribution || {}, 
+        3
+      ).map(c => ({
+        name: c.key,
+        weight: c.value,
+        hex: this.getColorHex(c.key) // Helper to estimate hex
+      }));
+
+      // 3. SIGNATURE FABRICS (top 3, with properties)
+      const signatureFabrics = this.extractTopDistribution(
+        styleProfile.fabric_distribution || {},
+        3
+      ).map(f => ({
+        name: f.key,
+        weight: f.value,
+        properties: this.getFabricProperties(f.key) // Infer from common knowledge
+      }));
+
+      // 4. SIGNATURE CONSTRUCTION (top 5 recurring details)
+      const signatureConstruction = (styleProfile.construction_patterns || [])
+        .slice(0, 5)
+        .map(c => ({
+          detail: c.name,
+          frequency: parseFloat(c.frequency.replace('%', '')) / 100
+        }));
+
+      // 5. PHOTOGRAPHY PREFERENCES (CRITICAL for shot consistency)
+      const preferredShotTypes = this.extractShotTypePreferences(styleProfile);
+      const preferredLighting = this.extractLightingPreferences(styleProfile);
+      const preferredAngles = this.extractAnglePreferences(styleProfile);
+
+      // 6. PRIMARY GARMENTS (top 5)
+      const primaryGarments = this.extractTopDistribution(
+        styleProfile.garment_distribution || {},
+        5
+      ).map(g => ({
+        type: g.key,
+        weight: g.value
+      }));
+
+      // 7. CONFIDENCE METRICS
+      const aestheticConfidence = primaryAesthetic?.strength || 0.5;
+      const overallConfidence = parseFloat(styleProfile.avg_confidence || 0.5);
+
+      const brandDNA = {
+        // Core Identity
+        primaryAesthetic: primaryAesthetic?.name || 'contemporary',
+        secondaryAesthetics: secondaryAesthetics.map(a => a.name),
+        aestheticConfidence,
+
+        // Visual Signatures
+        signatureColors,
+        signatureFabrics,
+        signatureConstruction,
+
+        // Photography DNA (learned from portfolio)
+        preferredShotTypes,
+        preferredLighting,
+        preferredAngles,
+
+        // Garment Preferences
+        primaryGarments,
+
+        // Metadata
+        totalImages: styleProfile.total_images || 0,
+        overallConfidence,
+        lastUpdated: new Date().toISOString(),
+        driftScore: 0 // Will be calculated separately
+      };
+
+      logger.info('Brand DNA extracted successfully', {
+        primaryAesthetic: brandDNA.primaryAesthetic,
+        colorCount: signatureColors.length,
+        fabricCount: signatureFabrics.length,
+        constructionCount: signatureConstruction.length,
+        confidence: overallConfidence
+      });
+
+      return brandDNA;
+
+    } catch (error) {
+      logger.error('Failed to extract brand DNA', { error: error.message });
+      return null;
+    }
+  }
+
+  /**
+   * Helper: Extract top N items from distribution object
+   */
+  extractTopDistribution(distribution, n = 3) {
+    return Object.entries(distribution)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, n)
+      .map(([key, value]) => ({ key, value }));
+  }
+
+  /**
+   * Helper: Extract shot type preferences from style profile
+   */
+  extractShotTypePreferences(styleProfile) {
+    // Look in ultra-detailed descriptors for photography data
+    const descriptors = styleProfile.signature_pieces || [];
+    const shotTypeCounts = {};
+
+    descriptors.forEach(desc => {
+      const shotType = desc.photography?.shot_composition?.type;
+      if (shotType) {
+        shotTypeCounts[shotType] = (shotTypeCounts[shotType] || 0) + 1;
+      }
+    });
+
+    const total = Object.values(shotTypeCounts).reduce((sum, count) => sum + count, 0);
+    
+    return Object.entries(shotTypeCounts)
+      .map(([type, count]) => ({
+        type,
+        frequency: count / total
+      }))
+      .sort((a, b) => b.frequency - a.frequency)
+      .slice(0, 3);
+  }
+
+  /**
+   * Helper: Extract lighting preferences
+   */
+  extractLightingPreferences(styleProfile) {
+    const descriptors = styleProfile.signature_pieces || [];
+    const lightingCounts = {};
+
+    descriptors.forEach(desc => {
+      const lighting = desc.photography?.lighting?.type;
+      if (lighting) {
+        lightingCounts[lighting] = (lightingCounts[lighting] || 0) + 1;
+      }
+    });
+
+    const total = Object.values(lightingCounts).reduce((sum, count) => sum + count, 0);
+    
+    return Object.entries(lightingCounts)
+      .map(([type, count]) => ({
+        type,
+        frequency: count / total
+      }))
+      .sort((a, b) => b.frequency - a.frequency)
+      .slice(0, 3);
+  }
+
+  /**
+   * Helper: Extract camera angle preferences
+   */
+  extractAnglePreferences(styleProfile) {
+    const descriptors = styleProfile.signature_pieces || [];
+    const angleCounts = {};
+
+    descriptors.forEach(desc => {
+      const angle = desc.photography?.camera_angle?.horizontal;
+      if (angle) {
+        angleCounts[angle] = (angleCounts[angle] || 0) + 1;
+      }
+    });
+
+    const total = Object.values(angleCounts).reduce((sum, count) => sum + count, 0);
+    
+    return Object.entries(angleCounts)
+      .map(([angle, count]) => ({
+        angle,
+        frequency: count / total
+      }))
+      .sort((a, b) => b.frequency - a.frequency)
+      .slice(0, 3);
+  }
+
+  /**
+   * Helper: Get estimated hex for common color names
+   */
+  getColorHex(colorName) {
+    const colorMap = {
+      'navy': '#1a2b4c',
+      'black': '#000000',
+      'white': '#ffffff',
+      'beige': '#f5f5dc',
+      'camel': '#c19a6b',
+      'gray': '#808080',
+      'charcoal': '#36454f',
+      'cream': '#fffdd0',
+      'brown': '#964b00',
+      'burgundy': '#800020'
+    };
+    
+    return colorMap[colorName.toLowerCase()] || '#808080';
+  }
+
+  /**
+   * Helper: Get common fabric properties
+   */
+  getFabricProperties(fabricName) {
+    const fabricMap = {
+      'wool': { texture: 'smooth', drape: 'structured', weight: 'medium' },
+      'cotton': { texture: 'crisp', drape: 'structured', weight: 'light' },
+      'silk': { texture: 'smooth', drape: 'fluid', weight: 'light' },
+      'linen': { texture: 'textured', drape: 'relaxed', weight: 'light' },
+      'cashmere': { texture: 'soft', drape: 'fluid', weight: 'light' },
+      'denim': { texture: 'rough', drape: 'stiff', weight: 'heavy' }
+    };
+    
+    return fabricMap[fabricName.toLowerCase()] || { 
+      texture: 'smooth', 
+      drape: 'structured', 
+      weight: 'medium' 
+    };
+  }
+
+  /**
+   * Get enhanced style profile for a user
+   * This includes all the rich data needed for brand DNA
+   * 
+   * @param {string} userId - User ID
+   * @returns {Promise<Object>} Enhanced style profile
+   */
+  async getEnhancedStyleProfile(userId) {
+    try {
+      // Get the style profile with all enrichments
+      const query = `
+        SELECT 
+          sp.*,
+          (
+            SELECT json_agg(
+              json_build_object(
+                'image_id', udd.image_id,
+                'description', udd.executive_summary->>'one_sentence_description',
+                'standout_detail', udd.executive_summary->>'standout_detail',
+                'photography', udd.photography,
+                'garment_type', (udd.garments->0->>'type'),
+                'confidence', udd.overall_confidence
+              )
+            )
+            FROM ultra_detailed_descriptors udd
+            WHERE udd.user_id = sp.user_id
+              AND udd.overall_confidence > 0.75
+            ORDER BY udd.overall_confidence DESC
+            LIMIT 10
+          ) as signature_pieces
+        FROM style_profiles sp
+        WHERE sp.user_id = $1
+      `;
+
+      const result = await db.query(query, [userId]);
+      
+      if (result.rows.length === 0) {
+        logger.warn('No style profile found for user', { userId });
+        return null;
+      }
+
+      const profile = result.rows[0];
+      
+      // Parse JSON fields
+      return {
+        ...profile,
+        garment_distribution: this.safeParseJSON(profile.garment_distribution, {}),
+        color_distribution: this.safeParseJSON(profile.color_distribution, {}),
+        fabric_distribution: this.safeParseJSON(profile.fabric_distribution, {}),
+        silhouette_distribution: this.safeParseJSON(profile.silhouette_distribution, {}),
+        aesthetic_themes: this.safeParseJSON(profile.aesthetic_themes, []),
+        construction_patterns: this.safeParseJSON(profile.construction_patterns, []),
+        signature_pieces: profile.signature_pieces || []
+      };
+
+    } catch (error) {
+      logger.error('Failed to get enhanced style profile', {
+        userId,
+        error: error.message
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Calculate how consistent a generated prompt/image is with brand DNA
+   * 
+   * @param {Object} selected - Thompson sampled selections
+   * @param {Object} brandDNA - Extracted brand DNA
+   * @returns {number} Consistency score 0-1
+   */
+  calculateBrandConsistency(selected, brandDNA) {
+    if (!brandDNA) return 0.5; // Neutral if no brand DNA
+
+    let score = 0;
+    let maxScore = 0;
+
+    // 1. AESTHETIC MATCH (weight: 25%)
+    maxScore += 25;
+    if (selected.styleContext === brandDNA.primaryAesthetic) {
+      score += 25;
+    } else if (brandDNA.secondaryAesthetics.includes(selected.styleContext)) {
+      score += 15;
+    }
+
+    // 2. COLOR MATCH (weight: 25%)
+    maxScore += 25;
+    if (selected.colors && selected.colors.length > 0) {
+      const brandColors = brandDNA.signatureColors.map(c => c.name);
+      const matchedColors = selected.colors.filter(c => 
+        brandColors.includes(c.name)
+      );
+      score += (matchedColors.length / selected.colors.length) * 25;
+    }
+
+    // 3. FABRIC MATCH (weight: 15%)
+    maxScore += 15;
+    if (selected.fabric) {
+      const brandFabrics = brandDNA.signatureFabrics.map(f => f.name);
+      if (brandFabrics.includes(selected.fabric.material)) {
+        score += 15;
+      }
+    }
+
+    // 4. CONSTRUCTION MATCH (weight: 15%)
+    maxScore += 15;
+    if (selected.construction && selected.construction.length > 0) {
+      const brandConstruction = brandDNA.signatureConstruction.map(c => c.detail);
+      const matchedDetails = selected.construction.filter(c =>
+        brandConstruction.some(bc => c.includes(bc) || bc.includes(c))
+      );
+      score += (matchedDetails.length / selected.construction.length) * 15;
+    }
+
+    // 5. PHOTOGRAPHY MATCH (weight: 20%)
+    maxScore += 20;
+    if (selected.pose && brandDNA.preferredShotTypes.length > 0) {
+      const preferredShot = brandDNA.preferredShotTypes[0].type;
+      if (selected.pose.shot_type === preferredShot) {
+        score += 10;
+      }
+    }
+    if (selected.photography && brandDNA.preferredAngles.length > 0) {
+      const preferredAngle = brandDNA.preferredAngles[0].angle;
+      if (selected.photography.angle === preferredAngle) {
+        score += 10;
+      }
+    }
+
+    const finalScore = maxScore > 0 ? score / maxScore : 0.5;
+    
+    logger.debug('Brand consistency calculated', {
+      score: finalScore.toFixed(2),
+      components: {
+        aesthetic: selected.styleContext === brandDNA.primaryAesthetic,
+        colorMatch: selected.colors?.length || 0,
+        fabricMatch: !!selected.fabric,
+        constructionMatch: selected.construction?.length || 0
+      }
+    });
+
+    return finalScore;
+  }
+
+  /**
+   * Thompson Sampling with brand DNA bias
+   * Boosts selection probability for brand-aligned attributes
+   * 
+   * @param {Object} preferenceDict - Attribute preferences
+   * @param {Object} thompsonDict - Thompson parameters
+   * @param {Array} brandPreferences - Brand DNA preferred attributes
+   * @param {boolean} shouldExplore - Exploration flag
+   * @param {number} brandBoost - Multiplier for brand attributes (default: 1.5)
+   * @returns {Object} Selected attribute
+   */
+  thompsonSampleWithBias(
+    preferenceDict, 
+    thompsonDict, 
+    brandPreferences = [], 
+    shouldExplore = false,
+    brandBoost = 1.5
+  ) {
+    const items = Object.keys(preferenceDict);
+    
+    if (items.length === 0) return null;
+
+    // Exploration: still random, but prefer brand attributes
+    if (shouldExplore) {
+      // Weight random selection toward brand preferences
+      const weights = items.map(key => {
+        const isBrand = brandPreferences.includes(key);
+        return isBrand ? brandBoost : 1.0;
+      });
+      
+      const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+      let random = Math.random() * totalWeight;
+      
+      for (let i = 0; i < items.length; i++) {
+        random -= weights[i];
+        if (random <= 0) {
+          return preferenceDict[items[i]].data;
+        }
+      }
+      
+      return preferenceDict[items[0]].data;
+    }
+
+    // Exploitation: Thompson Sampling with brand boost
+    let bestKey = null;
+    let bestSample = -1;
+
+    for (const key of items) {
+      const params = thompsonDict[key] || { 
+        alpha: this.DEFAULT_ALPHA, 
+        beta: this.DEFAULT_BETA 
+      };
+      
+      let sample = this.betaSample(params.alpha, params.beta);
+      
+      // Apply brand boost if this is a brand preference
+      if (brandPreferences.includes(key)) {
+        sample *= brandBoost;
+        logger.debug('Applied brand boost', { attribute: key, boost: brandBoost });
+      }
+      
+      if (sample > bestSample) {
+        bestSample = sample;
+        bestKey = key;
+      }
+    }
+
+    return bestKey ? preferenceDict[bestKey].data : null;
+  }
+
+  /**
+   * Thompson Sample Multiple with Brand Bias
+   */
+  thompsonSampleMultipleWithBias(
+    preferenceDict, 
+    thompsonDict, 
+    brandPreferences = [], 
+    shouldExplore = false,
+    n = 2,
+    brandBoost = 1.5
+  ) {
+    const items = Object.keys(preferenceDict);
+    
+    if (items.length === 0) return [];
+
+    // Exploration: random selection with brand preference
+    if (shouldExplore) {
+      const weights = items.map(key => {
+        const isBrand = brandPreferences.includes(key);
+        return isBrand ? brandBoost : 1.0;
+      });
+      
+      // Weighted random sampling without replacement
+      const selected = [];
+      const availableItems = [...items];
+      const availableWeights = [...weights];
+      
+      for (let i = 0; i < Math.min(n, items.length); i++) {
+        const totalWeight = availableWeights.reduce((sum, w) => sum + w, 0);
+        let random = Math.random() * totalWeight;
+        
+        for (let j = 0; j < availableItems.length; j++) {
+          random -= availableWeights[j];
+          if (random <= 0) {
+            selected.push(preferenceDict[availableItems[j]].data);
+            availableItems.splice(j, 1);
+            availableWeights.splice(j, 1);
+            break;
+          }
+        }
+      }
+      
+      return selected;
+    }
+
+    // Exploitation: Thompson Sampling with brand boost
+    const samples = items.map(key => {
+      const params = thompsonDict[key] || { 
+        alpha: this.DEFAULT_ALPHA, 
+        beta: this.DEFAULT_BETA 
+      };
+      
+      let sample = this.betaSample(params.alpha, params.beta);
+      
+      // Apply brand boost
+      if (brandPreferences.includes(key)) {
+        sample *= brandBoost;
+      }
+      
+      return { key, sample };
+    });
+
+    samples.sort((a, b) => b.sample - a.sample);
+    
+    return samples.slice(0, n).map(s => preferenceDict[s.key].data);
   }
 }
 

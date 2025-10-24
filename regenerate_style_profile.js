@@ -32,7 +32,7 @@ async function regenerateStyleProfile() {
 
     // Regenerate the style profile
     console.log('Regenerating style profile...');
-    const profile = await trendAnalysisAgent.generateStyleProfile(userId, portfolioId);
+    const profile = await trendAnalysisAgent.generateEnhancedStyleProfile(userId, portfolioId);
     
     console.log('Style profile regenerated successfully:');
     console.log('Profile ID:', profile.id);

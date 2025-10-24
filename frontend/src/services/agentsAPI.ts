@@ -25,6 +25,47 @@ agentsHTTP.interceptors.response.use(
 );
 
 // Type definitions
+export interface BrandDNA {
+  primaryAesthetic: string;
+  secondaryAesthetics: string[];
+  signatureColors: Array<{
+    name: string;
+    weight: number;
+    hex: string;
+  }>;
+  signatureFabrics: Array<{
+    name: string;
+    weight: number;
+    properties: {
+      texture: string;
+      drape: string;
+      weight: string;
+    };
+  }>;
+  signatureConstruction: Array<{
+    detail: string;
+    frequency: number;
+  }>;
+  preferredPhotography: {
+    shotTypes: Array<{ type: string; frequency: number }>;
+    lighting: Array<{ type: string; frequency: number }>;
+    angles: Array<{ angle: string; frequency: number }>;
+  };
+  primaryGarments: Array<{
+    type: string;
+    weight: number;
+  }>;
+  confidence: {
+    aesthetic: number;
+    overall: number;
+  };
+  metadata: {
+    totalImages: number;
+    lastUpdated: string;
+    driftScore: number;
+  };
+}
+
 export interface StyleProfile {
   designer_id: string;
   version: number;
@@ -53,6 +94,7 @@ export interface StyleProfile {
   confidence_score: number;
   images_analyzed: number;
   created_at: string;
+  brandDNA?: BrandDNA;
 }
 
 export interface GeneratedImage {
@@ -66,6 +108,8 @@ export interface GeneratedImage {
     original_prompt: string;
     generated_at: string;
   };
+  brand_consistency_score?: number;
+  brand_dna_applied?: boolean;
 }
 
 export interface BatchStatus {
@@ -176,6 +220,30 @@ export const generationAPI = {
       prompt,
       mode: options.mode || 'specific',
       quantity: options.quantity || 1
+    });
+    return response.data;
+  },
+
+  /**
+   * Generate images with Brand DNA enforcement
+   */
+  generateWithBrandDNA: async (
+    designerId: string,
+    prompt: string,
+    options: {
+      enforceBrandDNA?: boolean;
+      brandDNAStrength?: number;
+      creativity?: number;
+      count?: number;
+    } = {}
+  ) => {
+    const response = await agentsHTTP.post('/generation/generate-with-dna', {
+      designer_id: designerId,
+      prompt,
+      enforceBrandDNA: options.enforceBrandDNA ?? true,
+      brandDNAStrength: options.brandDNAStrength ?? 0.8,
+      creativity: options.creativity ?? 0.3,
+      count: options.count ?? 4
     });
     return response.data;
   },
@@ -399,6 +467,7 @@ export const agentsAPI = {
   
   // Image generation
   generateImage: generationAPI.generate,
+  generateWithBrandDNA: generationAPI.generateWithBrandDNA,
   smartGenerate: generationAPI.smartGenerate,
   getBatchStatus: generationAPI.getBatchStatus,
   getUserImages: generationAPI.getUserImages,

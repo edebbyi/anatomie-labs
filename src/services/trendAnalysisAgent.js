@@ -455,8 +455,14 @@ class ImprovedTrendAnalysisAgent {
    */
   calculateAvgConfidence(descriptors) {
     if (descriptors.length === 0) return 0;
-    const sum = descriptors.reduce((acc, d) => acc + (d.overall_confidence || 0), 0);
-    return (sum / descriptors.length).toFixed(3);
+    const sum = descriptors.reduce((acc, d) => {
+      const confidence = parseFloat(d.overall_confidence || 0);
+      return acc + confidence;
+    }, 0);
+    const avg = sum / descriptors.length;
+    // Clamp to 0-1 range and format to fit numeric(4,3): max 9.999
+    const clamped = Math.min(Math.max(avg, 0), 1);
+    return parseFloat(clamped.toFixed(3));
   }
 
   /**
@@ -464,8 +470,14 @@ class ImprovedTrendAnalysisAgent {
    */
   calculateAvgCompleteness(descriptors) {
     if (descriptors.length === 0) return 0;
-    const sum = descriptors.reduce((acc, d) => acc + (d.completeness_percentage || 0), 0);
-    return (sum / descriptors.length).toFixed(1);
+    const sum = descriptors.reduce((acc, d) => {
+      const completeness = parseFloat(d.completeness_percentage || 0);
+      return acc + completeness;
+    }, 0);
+    const avg = sum / descriptors.length;
+    // Clamp to 0-100 range and format to fit numeric(5,2): max 999.99
+    const clamped = Math.min(Math.max(avg, 0), 100);
+    return parseFloat(clamped.toFixed(2));
   }
 
   /**
@@ -510,6 +522,15 @@ class ImprovedTrendAnalysisAgent {
    * Save enhanced profile
    */
   async saveEnhancedProfile(userId, portfolioId, data) {
+    // Log numeric values before insert to debug overflow issues
+    logger.info('Saving enhanced profile with numeric values', {
+      userId,
+      portfolioId,
+      total_images: data.total_images,
+      avg_confidence: data.avg_confidence,
+      avg_completeness: data.avg_completeness
+    });
+    
     const query = `
       INSERT INTO style_profiles (
         user_id, 

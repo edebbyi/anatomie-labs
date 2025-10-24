@@ -31,6 +31,10 @@ const Generation: React.FC = () => {
   const [validationResults, setValidationResults] = useState<any>(null);
   const [styleProfile, setStyleProfile] = useState<any>(null);
   
+  // Brand DNA state
+  const [enforceBrandDNA, setEnforceBrandDNA] = useState(true);
+  const [brandDNAStrength, setBrandDNAStrength] = useState(0.8);
+  
   // Visual controls state
   const [styleControls, setStyleControls] = useState({
     femininity: 85,
@@ -136,51 +140,58 @@ const Generation: React.FC = () => {
     setIsGenerating(true);
 
     try {
-      // For batch generation, we would use different logic
-      if (generationMode === 'collection' || generationMode === 'campaign' || batchConfig.size > 10) {
-        // Simulate batch generation
-        setBatchProgress({
-          current: 0,
-          total: batchConfig.size,
-          status: 'processing'
-        });
-        
-        // Simulate progress updates
-        const interval = setInterval(() => {
-          setBatchProgress(prev => {
-            const newCurrent = Math.min(prev.current + 1, prev.total);
-            if (newCurrent >= prev.total) {
-              clearInterval(interval);
-              return { ...prev, status: 'completed', current: prev.total };
-            }
-            return { ...prev, current: newCurrent };
-          });
-        }, 500);
-      }
-
-      const result = await agentsAPI.generateImage(designerId, promptText, {
-        mode: generationMode === 'exploration' ? 'batch' : 'specific',
-        quantity: generationMode === 'collection' ? 8 : 
-                  generationMode === 'campaign' ? 6 : 
-                  batchConfig.size
+      // Use new brand DNA endpoint
+      const token = localStorage.getItem('token');
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
+      
+      const response = await fetch(`${apiUrl}/podna/generate-with-dna`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          prompt: promptText,
+          enforceBrandDNA,
+          brandDNAStrength,
+          creativity: generationMode === 'exploration' ? 0.7 : 
+                     generationMode === 'single' ? 0.3 : 0.5,
+          count: generationMode === 'collection' ? 8 : 
+                 generationMode === 'campaign' ? 6 : 
+                 batchConfig.size
+        })
       });
 
-      if (result.success && result.results?.results) {
-        const newImages = result.results.results.map((img: any, idx: number) => ({
-          id: `gen-${Date.now()}-${idx}`,
-          url: img.image_url,
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Generation failed');
+      }
+
+      const result = await response.json();
+
+      if (result.success && result.data?.generations) {
+        const newImages = result.data.generations.map((gen: any, idx: number) => ({
+          id: gen.id || `gen-${Date.now()}-${idx}`,
+          url: gen.url,
           prompt: promptText,
-          timestamp: new Date()
+          timestamp: new Date(),
+          brandConsistencyScore: gen.brand_consistency_score || 0.5,
+          brandDNAApplied: gen.brand_dna_applied || false
         }));
 
         setImages(prev => [...newImages, ...prev]);
 
-        // Save to localStorage for Home page
+        // Save to localStorage
         const existing = JSON.parse(localStorage.getItem('generatedImages') || '[]');
         localStorage.setItem('generatedImages', JSON.stringify([...newImages, ...existing]));
 
         if (typeof commandOrEvent !== 'string') {
           setPrompt('');
+        }
+        
+        // Show average brand consistency
+        if (result.data.avgBrandConsistency) {
+          console.log('Average brand consistency:', Math.round(result.data.avgBrandConsistency * 100) + '%');
         }
       }
     } catch (err: any) {
@@ -290,30 +301,184 @@ const Generation: React.FC = () => {
             {/* Style Profile Integration */}
             {styleProfile && (
               <div className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm">
-                <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                  <Palette className="w-5 h-5" />
-                  Active Style Profile
-                </h2>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
+                    <Palette className="w-5 h-5" />
+                    Your Brand DNA
+                  </h2>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs px-2 py-1 rounded-full ${
+                      enforceBrandDNA 
+                        ? 'bg-green-100 text-green-700' 
+                        : 'bg-gray-100 text-gray-600'
+                    }`}>
+                      {enforceBrandDNA ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                </div>
                 
-                <div className="space-y-3">
+                <div className="space-y-4">
+                  {/* Core Aesthetic */}
                   <div>
-                    <h3 className="text-sm font-medium text-gray-700">Your Brand DNA</h3>
-                    <ul className="mt-2 space-y-1">
-                      {styleProfile.signature_elements?.colors?.slice(0, 3).map((color: string, idx: number) => (
-                        <li key={idx} className="text-sm text-gray-600">• {color}</li>
-                      ))}
-                      {styleProfile.aesthetic_profile?.primary_style && (
-                        <li className="text-sm text-gray-600">• {styleProfile.aesthetic_profile.primary_style}</li>
-                      )}
-                    </ul>
+                    <h3 className="text-sm font-medium text-gray-700 mb-2">Core Aesthetic</h3>
+                    <div className="flex items-center gap-2">
+                      <span className="px-3 py-1.5 bg-gray-900 text-white rounded-full text-sm font-medium">
+                        {styleProfile.brandDNA?.primaryAesthetic || 'Contemporary'}
+                      </span>
+                      <span className="text-xs text-gray-500">
+                        {Math.round((styleProfile.brandDNA?.confidence?.aesthetic || 0.5) * 100)}% confidence
+                      </span>
+                    </div>
+                    
+                    {styleProfile.brandDNA?.secondaryAesthetics?.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {styleProfile.brandDNA.secondaryAesthetics.map((aesthetic: string, idx: number) => (
+                          <span key={idx} className="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">
+                            {aesthetic}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   
-                  <button 
-                    className="text-xs text-gray-500 hover:text-gray-700"
-                    onClick={() => setStyleProfile(null)}
-                  >
-                    Disable for this session
-                  </button>
+                  {/* Signature Colors */}
+                  {styleProfile.brandDNA?.signatureColors?.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-medium text-gray-700 mb-2">Signature Colors</h3>
+                      <div className="flex items-center gap-2">
+                        {styleProfile.brandDNA.signatureColors.slice(0, 5).map((color: any, idx: number) => (
+                          <div key={idx} className="flex items-center gap-1.5">
+                            <div 
+                              className="w-6 h-6 rounded-full border border-gray-300"
+                              style={{ backgroundColor: color.hex }}
+                              title={`${color.name} (${Math.round(color.weight * 100)}%)`}
+                            />
+                            <span className="text-xs text-gray-600 capitalize">{color.name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Signature Fabrics */}
+                  {styleProfile.brandDNA?.signatureFabrics?.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-medium text-gray-700 mb-2">Signature Fabrics</h3>
+                      <div className="flex flex-wrap gap-2">
+                        {styleProfile.brandDNA.signatureFabrics.slice(0, 4).map((fabric: any, idx: number) => (
+                          <span key={idx} className="px-2 py-1 bg-gray-50 text-gray-700 rounded text-xs border border-gray-200">
+                            {fabric.name} ({Math.round(fabric.weight * 100)}%)
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Signature Construction */}
+                  {styleProfile.brandDNA?.signatureConstruction?.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-medium text-gray-700 mb-2">Signature Details</h3>
+                      <ul className="space-y-1">
+                        {styleProfile.brandDNA.signatureConstruction.slice(0, 3).map((detail: any, idx: number) => (
+                          <li key={idx} className="text-sm text-gray-600 flex items-center">
+                            <span className="mr-2">•</span>
+                            <span className="capitalize">{detail.detail}</span>
+                            <span className="ml-2 text-xs text-gray-400">
+                              ({Math.round(detail.frequency * 100)}%)
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  
+                  {/* Brand Consistency Info */}
+                  <div className="pt-3 border-t border-gray-200">
+                    <div className="flex items-center justify-between text-xs mb-2">
+                      <span className="text-gray-600">
+                        AI will {enforceBrandDNA ? 'maintain' : 'loosely follow'} brand consistency
+                      </span>
+                      <button
+                        onClick={() => setEnforceBrandDNA(!enforceBrandDNA)}
+                        className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                          enforceBrandDNA
+                            ? 'bg-gray-900 text-white hover:bg-gray-800'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        {enforceBrandDNA ? 'Disable' : 'Enable'}
+                      </button>
+                    </div>
+                    
+                    {!enforceBrandDNA && (
+                      <div className="mt-2 p-2 bg-yellow-50 rounded-lg">
+                        <p className="text-xs text-yellow-800">
+                          ⚠️ Brand DNA disabled. Generations may be more experimental but less aligned with your signature style.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Brand DNA Controls */}
+            {showAdvancedControls && styleProfile && (
+              <div className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm">
+                <h3 className="text-lg font-medium text-gray-900 mb-4">Brand DNA Control</h3>
+                
+                <div className="space-y-4">
+                  {/* Brand DNA Toggle */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">Enforce Brand DNA</p>
+                      <p className="text-xs text-gray-500">
+                        AI will strongly prefer your signature elements
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setEnforceBrandDNA(!enforceBrandDNA)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        enforceBrandDNA ? 'bg-gray-900' : 'bg-gray-300'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          enforceBrandDNA ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  
+                  {/* Brand DNA Strength */}
+                  {enforceBrandDNA && (
+                    <div>
+                      <div className="flex justify-between text-sm mb-2">
+                        <span className="font-medium text-gray-700">Brand DNA Strength</span>
+                        <span className="text-gray-500">{Math.round(brandDNAStrength * 100)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="50"
+                        max="100"
+                        value={brandDNAStrength * 100}
+                        onChange={(e) => setBrandDNAStrength(parseInt(e.target.value) / 100)}
+                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                      />
+                      <div className="flex justify-between text-xs text-gray-400 mt-1">
+                        <span>Balanced</span>
+                        <span>Strong</span>
+                        <span>Maximum</span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-2">
+                        {brandDNAStrength < 0.7 
+                          ? 'Balanced: Mix of brand and creative exploration' 
+                          : brandDNAStrength < 0.9 
+                            ? 'Strong: Heavy preference for brand elements' 
+                            : 'Maximum: Strict adherence to brand signature'}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -616,14 +781,49 @@ const Generation: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {images.map((image) => (
                     <div key={image.id} className="group">
-                      <div className="aspect-square bg-gray-100 rounded-lg overflow-hidden mb-3">
+                      <div className="aspect-square bg-gray-100 rounded-lg overflow-hidden mb-3 relative">
                         <img
                           src={image.url}
                           alt={image.prompt}
                           className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                         />
+                        
+                        {/* Brand Consistency Badge */}
+                        {image.brandDNAApplied && image.brandConsistencyScore !== undefined && (
+                          <div className="absolute top-2 right-2">
+                            <div className={`px-2 py-1 rounded-full text-xs font-medium backdrop-blur-sm ${
+                              image.brandConsistencyScore > 0.8 
+                                ? 'bg-green-500/90 text-white' 
+                                : image.brandConsistencyScore > 0.6 
+                                  ? 'bg-yellow-500/90 text-white' 
+                                  : 'bg-gray-500/90 text-white'
+                            }`}>
+                              {Math.round(image.brandConsistencyScore * 100)}% match
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Hover Overlay with Actions */}
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-all duration-200 flex items-center justify-center opacity-0 group-hover:opacity-100">
+                          <div className="flex gap-2">
+                            <button className="p-2 bg-white rounded-full hover:bg-gray-100">
+                              <Save className="w-4 h-4 text-gray-900" />
+                            </button>
+                            <button className="p-2 bg-white rounded-full hover:bg-gray-100">
+                              <Eye className="w-4 h-4 text-gray-900" />
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                      <p className="text-sm text-gray-600 line-clamp-2">{image.prompt}</p>
+                      
+                      <div className="space-y-1">
+                        <p className="text-sm text-gray-600 line-clamp-2">{image.prompt}</p>
+                        {image.brandConsistencyScore !== undefined && (
+                          <p className="text-xs text-gray-400">
+                            Brand consistency: {Math.round(image.brandConsistencyScore * 100)}%
+                          </p>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>

@@ -310,6 +310,18 @@ router.get('/profile', authMiddleware, asyncHandler(async (req, res) => {
       }
     };
 
+    // Extract brand DNA
+    const brandDNA = intelligentPromptBuilder.extractBrandDNA({
+      aesthetic_themes: parseJSON(profile.aesthetic_themes),
+      color_distribution: parseJSON(profile.color_distribution),
+      fabric_distribution: parseJSON(profile.fabric_distribution),
+      construction_patterns: parseJSON(profile.construction_patterns),
+      garment_distribution: parseJSON(profile.garment_distribution),
+      signature_pieces: parseJSON(profile.signature_pieces),
+      total_images: profile.total_images,
+      avg_confidence: profile.avg_confidence
+    });
+
     logger.info('Podna: Style profile fetched successfully', { 
       userId, 
       profileId: profile.id,
@@ -334,7 +346,29 @@ router.get('/profile', authMiddleware, asyncHandler(async (req, res) => {
           },
           updatedAt: profile.updated_at,
           portfolioImages: imagesResult.rows
-        }
+        },
+        brandDNA: brandDNA ? {
+          primaryAesthetic: brandDNA.primaryAesthetic,
+          secondaryAesthetics: brandDNA.secondaryAesthetics,
+          signatureColors: brandDNA.signatureColors,
+          signatureFabrics: brandDNA.signatureFabrics,
+          signatureConstruction: brandDNA.signatureConstruction,
+          preferredPhotography: {
+            shotTypes: brandDNA.preferredShotTypes,
+            lighting: brandDNA.preferredLighting,
+            angles: brandDNA.preferredAngles
+          },
+          primaryGarments: brandDNA.primaryGarments,
+          confidence: {
+            aesthetic: brandDNA.aestheticConfidence,
+            overall: brandDNA.overallConfidence
+          },
+          metadata: {
+            totalImages: brandDNA.totalImages,
+            lastUpdated: brandDNA.lastUpdated,
+            driftScore: brandDNA.driftScore
+          }
+        } : null
       }
     });
   } catch (error) {
@@ -512,6 +546,123 @@ router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to generate image'
+    });
+  }
+}));
+
+/**
+ * POST /api/podna/generate-with-dna
+ * Generate images with brand DNA enforcement
+ */
+router.post('/generate-with-dna', authMiddleware, asyncHandler(async (req, res) => {
+  try {
+    const { userId } = req.user;
+    const { 
+      prompt, 
+      enforceBrandDNA = true, 
+      brandDNAStrength = 0.8,
+      creativity = 0.3,
+      count = 4,
+      options = {} 
+    } = req.body;
+
+    if (!prompt || !prompt.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Prompt is required'
+      });
+    }
+
+    // Get enhanced style profile
+    const styleProfile = await intelligentPromptBuilder.getEnhancedStyleProfile(userId);
+    
+    if (!styleProfile && enforceBrandDNA) {
+      return res.status(400).json({
+        success: false,
+        message: 'No style profile found. Please upload a portfolio first.',
+        code: 'NO_STYLE_PROFILE'
+      });
+    }
+
+    // Extract brand DNA
+    const brandDNA = styleProfile 
+      ? intelligentPromptBuilder.extractBrandDNA(styleProfile)
+      : null;
+
+    logger.info('Generating with brand DNA', {
+      userId,
+      prompt: prompt.substring(0, 50),
+      enforceBrandDNA,
+      hasBrandDNA: !!brandDNA,
+      brandConfidence: brandDNA?.overallConfidence
+    });
+
+    // Generate enhanced prompt
+    const promptResult = await intelligentPromptBuilder.generatePrompt(userId, {
+      ...options,
+      creativity,
+      brandDNA,
+      enforceBrandDNA,
+      brandDNAStrength,
+      userPrompt: prompt
+    });
+
+    // Generate images
+    const generations = [];
+
+    for (let i = 0; i < count; i++) {
+      try {
+        const generation = await imageGenerationAgent.generateImage(userId, promptResult.prompt_id, options);
+        
+        // Add brand consistency score to generation
+        generation.brand_consistency_score = promptResult.metadata.brand_consistency_score;
+        generation.brand_dna_applied = enforceBrandDNA;
+        
+        generations.push(generation);
+        
+      } catch (genError) {
+        logger.error('Individual generation failed', {
+          userId,
+          index: i,
+          error: genError.message
+        });
+      }
+    }
+
+    if (generations.length === 0) {
+      throw new Error('All generations failed');
+    }
+
+    res.json({
+      success: true,
+      data: {
+        generations,
+        prompt: promptResult,
+        brandDNA: brandDNA ? {
+          primaryAesthetic: brandDNA.primaryAesthetic,
+          signatureElements: {
+            colors: brandDNA.signatureColors.slice(0, 3).map(c => c.name),
+            fabrics: brandDNA.signatureFabrics.slice(0, 3).map(f => f.name),
+            construction: brandDNA.signatureConstruction.slice(0, 3).map(c => c.detail)
+          },
+          confidence: brandDNA.overallConfidence
+        } : null,
+        avgBrandConsistency: generations.reduce((sum, g) => 
+          sum + (g.brand_consistency_score || 0.5), 0
+        ) / generations.length
+      }
+    });
+
+  } catch (error) {
+    logger.error('Generation with DNA failed', {
+      error: error.message,
+      stack: error.stack
+    });
+    
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Generation failed',
+      code: 'GENERATION_ERROR'
     });
   }
 }));
@@ -770,7 +921,7 @@ router.post('/onboard', authMiddleware, upload.single('portfolio'), asyncHandler
 
     // Step 3: Generate style profile
     logger.info('Podna Onboarding: Step 3/4 - Generating style profile');
-    const profile = await trendAnalysisAgent.generateStyleProfile(userId, portfolioId);
+    const profile = await trendAnalysisAgent.generateEnhancedStyleProfile(userId, portfolioId);
     
     logger.info('Podna Onboarding: Profile generated successfully', {
       profileId: profile.id,

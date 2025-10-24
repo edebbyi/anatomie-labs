@@ -456,7 +456,7 @@ class ImprovedTrendAnalysisAgent {
   calculateAvgConfidence(descriptors) {
     if (descriptors.length === 0) return 0;
     const sum = descriptors.reduce((acc, d) => acc + (d.overall_confidence || 0), 0);
-    return (sum / descriptors.length).toFixed(3);
+    return parseFloat((sum / descriptors.length).toFixed(3));
   }
 
   /**
@@ -465,7 +465,7 @@ class ImprovedTrendAnalysisAgent {
   calculateAvgCompleteness(descriptors) {
     if (descriptors.length === 0) return 0;
     const sum = descriptors.reduce((acc, d) => acc + (d.completeness_percentage || 0), 0);
-    return (sum / descriptors.length).toFixed(1);
+    return parseFloat((sum / descriptors.length).toFixed(1));
   }
 
   /**
