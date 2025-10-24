@@ -264,10 +264,11 @@ class IngestionAgent {
       logger.error('Failed to generate embedding', { imageId: imageRecord.id, error: err.message });
     });
     
-    // Generate caption (async, don't block)
-    this.generateCaption(imageRecord.id, imageData.buffer).catch(err => {
-      logger.error('Failed to generate caption', { imageId: imageRecord.id, error: err.message });
-    });
+    // NOTE: Caption generation disabled - ultra-detailed analysis runs separately via /analyze endpoint
+    // // Generate caption (async, don't block)
+    // this.generateCaption(imageRecord.id, imageData.buffer).catch(err => {
+    //   logger.error('Failed to generate caption', { imageId: imageRecord.id, error: err.message });
+    // });
     
     return imageRecord;
   }

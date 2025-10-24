@@ -74,51 +74,73 @@ class UltraDetailedIngestionAgent {
       const batch = batches[batchIndex];
       
       const batchPromises = batch.map(async (image, indexInBatch) => {
-        try {
-          const descriptor = await this.analyzeImage(image);
-          results.descriptors.push(descriptor);
-          results.analyzed++;
-          processedCount++;
-          
-          totalConfidence += descriptor.metadata?.overall_confidence || 0;
-          totalCompleteness += descriptor.completeness_percentage || 0;
-          
-          if (progressCallback) {
-            progressCallback({
-              current: processedCount,
-              total: images.length,
-              percentage: Math.round((processedCount / images.length) * 100),
-              currentImage: image.filename,
-              analyzed: results.analyzed,
-              failed: results.failed,
-              avgConfidence: (totalConfidence / results.analyzed).toFixed(2),
-              avgCompleteness: (totalCompleteness / results.analyzed).toFixed(1)
-            });
+        const maxRetries = 2;
+        let lastError = null;
+        
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+          try {
+            if (attempt > 0) {
+              logger.info('Ultra-Detailed Ingestion: Retrying image analysis', {
+                imageId: image.id,
+                filename: image.filename,
+                attempt: attempt + 1,
+                maxAttempts: maxRetries + 1
+              });
+              // Wait before retrying (exponential backoff)
+              await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+            }
+            
+            const descriptor = await this.analyzeImage(image);
+            results.descriptors.push(descriptor);
+            results.analyzed++;
+            processedCount++;
+            
+            totalConfidence += descriptor.metadata?.overall_confidence || 0;
+            totalCompleteness += descriptor.completeness_percentage || 0;
+            
+            if (progressCallback) {
+              progressCallback({
+                current: processedCount,
+                total: images.length,
+                percentage: Math.round((processedCount / images.length) * 100),
+                currentImage: image.filename,
+                analyzed: results.analyzed,
+                failed: results.failed,
+                avgConfidence: (totalConfidence / results.analyzed).toFixed(2),
+                avgCompleteness: (totalCompleteness / results.analyzed).toFixed(1)
+              });
+            }
+            
+            return { success: true, descriptor };
+          } catch (error) {
+            lastError = error;
+            if (attempt === maxRetries) {
+              // Final attempt failed
+              logger.error('Ultra-Detailed Ingestion: Failed to analyze image after retries', { 
+                imageId: image.id,
+                filename: image.filename,
+                attempts: maxRetries + 1,
+                error: error.message 
+              });
+              results.failed++;
+              processedCount++;
+              
+              if (progressCallback) {
+                progressCallback({
+                  current: processedCount,
+                  total: images.length,
+                  percentage: Math.round((processedCount / images.length) * 100),
+                  currentImage: image.filename,
+                  analyzed: results.analyzed,
+                  failed: results.failed,
+                  error: error.message
+                });
+              }
+              
+              return { success: false, error: error.message };
+            }
+            // Will retry on next iteration
           }
-          
-          return { success: true, descriptor };
-        } catch (error) {
-          logger.error('Ultra-Detailed Ingestion: Failed to analyze image', { 
-            imageId: image.id,
-            filename: image.filename,
-            error: error.message 
-          });
-          results.failed++;
-          processedCount++;
-          
-          if (progressCallback) {
-            progressCallback({
-              current: processedCount,
-              total: images.length,
-              percentage: Math.round((processedCount / images.length) * 100),
-              currentImage: image.filename,
-              analyzed: results.analyzed,
-              failed: results.failed,
-              error: error.message
-            });
-          }
-          
-          return { success: false, error: error.message };
         }
       });
 

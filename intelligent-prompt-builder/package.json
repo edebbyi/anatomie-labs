@@ -1,0 +1,33 @@
+{
+  "name": "intelligent-prompt-builder",
+  "version": "1.0.0",
+  "description": "Unified prompt generation system with Thompson Sampling and caching for fashion AI platform",
+  "main": "src/services/IntelligentPromptBuilder.js",
+  "scripts": {
+    "test:compare": "node tests/migration_guide.js compare",
+    "test:benchmark": "node tests/migration_guide.js benchmark",
+    "test:example1": "node tests/migration_guide.js example1",
+    "test:example2": "node tests/migration_guide.js example2",
+    "test:example3": "node tests/migration_guide.js example3",
+    "test:example4": "node tests/migration_guide.js example4",
+    "test:example5": "node tests/migration_guide.js example5",
+    "checklist": "node tests/migration_guide.js checklist"
+  },
+  "keywords": [
+    "prompt",
+    "fashion",
+    "ai",
+    "thompson-sampling",
+    "cache",
+    "image-generation"
+  ],
+  "author": "Fashion AI Platform",
+  "license": "MIT",
+  "dependencies": {
+    "pg": "^8.x"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

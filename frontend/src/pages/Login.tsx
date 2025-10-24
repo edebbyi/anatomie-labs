@@ -28,13 +28,26 @@ const Login: React.FC = () => {
     try {
       await authAPI.login(formData);
       
-      // Check if user has completed onboarding
-      const userProfile = localStorage.getItem('userProfile');
-      const profileData = userProfile ? JSON.parse(userProfile) : null;
+      // Check if user has a style profile (completed onboarding)
+      const token = authAPI.getToken();
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
       
-      if (profileData && profileData.onboardingComplete) {
-        navigate('/home');
-      } else {
+      try {
+        const profileResponse = await fetch(`${apiUrl}/podna/profile`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        
+        if (profileResponse.ok) {
+          // User has a style profile, redirect to home
+          navigate('/home');
+        } else {
+          // User doesn't have a style profile, redirect to onboarding
+          navigate('/onboarding');
+        }
+      } catch (profileError) {
+        // If there's an error checking the profile, redirect to onboarding
         navigate('/onboarding');
       }
     } catch (err: any) {

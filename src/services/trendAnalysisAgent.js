@@ -125,12 +125,38 @@ class TrendAnalysisAgent {
     let total = 0;
 
     for (const desc of descriptors) {
-      const colors = desc.color_palette || [];
-      for (const color of colors) {
-        const normalized = color.toLowerCase().trim();
-        counts[normalized] = (counts[normalized] || 0) + 1;
-        total++;
+      // Parse garments JSON if it's a string
+      const garments = typeof desc.garments === 'string' 
+        ? JSON.parse(desc.garments) 
+        : desc.garments || [];
+      
+      // Iterate through each garment's color palette
+      for (const garment of garments) {
+        const colors = garment.color_palette || [];
+        for (const color of colors) {
+          // Extract color name from color object
+          if (color && typeof color === 'object' && color.color_name) {
+            const normalized = color.color_name.toLowerCase().trim();
+            counts[normalized] = (counts[normalized] || 0) + 1;
+            total++;
+          } else if (color && typeof color === 'string') {
+            // Fallback for string colors
+            const normalized = color.toLowerCase().trim();
+            counts[normalized] = (counts[normalized] || 0) + 1;
+            total++;
+          } else if (color && typeof color === 'object' && color.name) {
+            // Another fallback for color objects with name property
+            const normalized = color.name.toLowerCase().trim();
+            counts[normalized] = (counts[normalized] || 0) + 1;
+            total++;
+          }
+        }
       }
+    }
+
+    // Return empty object if no colors found
+    if (total === 0) {
+      return {};
     }
 
     const distribution = {};
@@ -148,38 +174,59 @@ class TrendAnalysisAgent {
    */
   aggregateStyleLabels(descriptors) {
     const labelCounts = {};
-    const labelScores = {};
-
+    
     for (const desc of descriptors) {
-      const labels = desc.raw_analysis?.style_labels || [];
+      // Extract style-related attributes from raw_analysis
+      const rawAnalysis = desc.raw_analysis || {};
       
-      for (const label of labels) {
-        const name = label.name;
-        const score = label.score || 0.5;
-        
-        labelCounts[name] = (labelCounts[name] || 0) + 1;
-        labelScores[name] = (labelScores[name] || 0) + score;
+      // Extract style attributes
+      const styleAttributes = [
+        rawAnalysis.mood_aesthetic,
+        rawAnalysis.style_tribe,
+        rawAnalysis.styling_approach,
+        rawAnalysis.formality_level
+      ].filter(Boolean);
+      
+      // Count each unique style attribute
+      for (const attr of styleAttributes) {
+        // Split by common delimiters and clean up
+        const labels = attr.split(/[,\/]/).map(l => l.trim().toLowerCase()).filter(Boolean);
+        for (const label of labels) {
+          // Skip generic terms
+          if (!['not_specified', 'not_visible', 'none'].includes(label)) {
+            labelCounts[label] = (labelCounts[label] || 0) + 1;
+          }
+        }
       }
     }
 
-    // Calculate average scores
+    // Calculate frequency-based scores
     const aggregated = [];
     for (const [name, count] of Object.entries(labelCounts)) {
-      const avgScore = labelScores[name] / count;
       const frequency = count / descriptors.length;
       
       aggregated.push({
-        name,
-        score: parseFloat((avgScore * frequency).toFixed(3)),
+        name: this.capitalizeLabel(name),
+        score: parseFloat(frequency.toFixed(3)),
         count,
         examples: []
       });
     }
 
-    // Sort by score and take top 5
+    // Sort by count and take top 5
     return aggregated
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => b.count - a.count)
       .slice(0, 5);
+  }
+  
+  /**
+   * Capitalize style label for display
+   */
+  capitalizeLabel(label) {
+    return label
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
   }
 
   /**
@@ -323,13 +370,37 @@ class TrendAnalysisAgent {
   async getPortfolioDescriptors(portfolioId) {
     const query = `
       SELECT d.*
-      FROM image_descriptors d
+      FROM ultra_detailed_descriptors d
       JOIN portfolio_images pi ON d.image_id = pi.id
       WHERE pi.portfolio_id = $1
     `;
 
     const result = await db.query(query, [portfolioId]);
-    return result.rows;
+    
+    // Transform ultra-detailed descriptors to flat structure for aggregation
+    return result.rows.map(row => {
+      const garments = typeof row.garments === 'string' ? JSON.parse(row.garments) : row.garments;
+      const primaryGarment = garments?.[0] || {};
+      const executiveSummary = typeof row.executive_summary === 'string' ? JSON.parse(row.executive_summary) : row.executive_summary;
+      const contextual = typeof row.contextual_attributes === 'string' ? JSON.parse(row.contextual_attributes) : row.contextual_attributes;
+      const stylingContext = typeof row.styling_context === 'string' ? JSON.parse(row.styling_context) : row.styling_context;
+      
+      return {
+        image_id: row.image_id,
+        garment_type: primaryGarment.type || executiveSummary?.key_garments?.[0] || 'unknown',
+        fabric: primaryGarment.fabric?.primary_material || 'unknown',
+        silhouette: primaryGarment.silhouette?.overall_shape || 'unknown',
+        garments: garments, // Include full garments array for color extraction
+        contextual_attributes: contextual,
+        styling_context: stylingContext,
+        raw_analysis: {
+          mood_aesthetic: contextual?.mood_aesthetic,
+          style_tribe: contextual?.style_tribe,
+          styling_approach: contextual?.styling_approach || stylingContext?.styling_approach,
+          formality_level: contextual?.formality_level
+        }
+      };
+    });
   }
 
   /**

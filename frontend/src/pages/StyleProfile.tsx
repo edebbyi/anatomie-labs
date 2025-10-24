@@ -50,14 +50,19 @@ const StyleProfile: React.FC = () => {
   const currentUser = authAPI.getCurrentUser();
   const token = authAPI.getToken();
   const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
+  const loadedRef = React.useRef(false);
 
   useEffect(() => {
     if (!currentUser) {
       navigate('/signup');
       return;
     }
+    // Prevent duplicate calls in React Strict Mode
+    if (loadedRef.current) return;
+    loadedRef.current = true;
     loadProfile();
-  }, [currentUser, navigate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run only once on mount
 
   const loadProfile = async () => {
     setLoading(true);
@@ -73,6 +78,11 @@ const StyleProfile: React.FC = () => {
       if (!response.ok) {
         if (response.status === 404) {
           setError('No style profile found. Please upload a portfolio first.');
+          setLoading(false);
+          return;
+        }
+        if (response.status === 429) {
+          setError('Too many requests. Please wait a moment and refresh the page.');
           setLoading(false);
           return;
         }

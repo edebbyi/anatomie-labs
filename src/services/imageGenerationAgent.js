@@ -434,10 +434,10 @@ class ImageGenerationAgent {
    * Generate batch of images
    */
   async generateBatch(userId, count = 10, options = {}) {
-    const PromptBuilderAgent = require('./promptBuilderAgent');
+    const PromptBuilderAgent = options.promptBuilder || require('./IntelligentPromptBuilder');
     const generations = [];
 
-    // Add variation to options for each generation to ensure diverse prompts
+    // Generate varied prompts for each image
     for (let i = 0; i < count; i++) {
       try {
         // Add variation to ensure different prompts
@@ -446,10 +446,10 @@ class ImageGenerationAgent {
           variationSeed: i, // Add seed for variation
           mode: options.mode || (i % 3 === 0 ? 'exploratory' : i % 3 === 1 ? 'refinement' : 'creative')
         };
-        
-        // Generate prompt
+      
+        // Generate prompt with variation seed
         const prompt = await PromptBuilderAgent.generatePrompt(userId, variedOptions);
-        
+      
         // Generate image
         const generation = await this.generateImage(userId, prompt.id, options);
         generations.push(generation);

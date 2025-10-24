@@ -3,7 +3,7 @@ const multer = require('multer');
 const { asyncHandler } = require('../../middleware/errorHandler');
 const logger = require('../../utils/logger');
 const generationService = require('../../services/generationService');
-const promptGeneratorAgent = require('../../services/promptGeneratorAgent');
+const IntelligentPromptBuilder = require('../../services/IntelligentPromptBuilder');
 const agentService = require('../../services/agentService');
 
 const router = express.Router();

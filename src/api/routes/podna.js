@@ -13,14 +13,20 @@ const db = require('../../services/database');
 
 // Import agents
 const ingestionAgent = require('../../services/ingestionAgent');
-const styleDescriptorAgent = require('../../services/enhancedStyleDescriptorAgent');
+const styleDescriptorAgent = require('../../services/ultraDetailedIngestionAgent');
 const trendAnalysisAgent = require('../../services/trendAnalysisAgent');
 const promptBuilderAgent = require('../../services/advancedPromptBuilderAgent');
+const intelligentPromptBuilder = require('../../services/IntelligentPromptBuilder');
+const PromptBuilderRouter = require('../../services/promptBuilderRouter');
+
+// Create router with 10% traffic to new system
+const promptRouter = new PromptBuilderRouter(10);
 const imageGenerationAgent = require('../../services/imageGenerationAgent');
 const feedbackLearnerAgent = require('../../services/feedbackLearnerAgent');
 const continuousLearningAgent = require('../../services/continuousLearningAgent');
 const validationAgent = require('../../services/validationAgent');
 
+// Add this after the existing imports
 const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
@@ -69,7 +75,7 @@ router.post('/upload', authMiddleware, upload.single('portfolio'), asyncHandler(
     logger.info('Podna: Upload completed', {
       portfolioId: result.portfolio.id,
       imageCount: result.portfolio.imageCount,
-      processingTime: result.processingTimeMs
+      processingTimeMs: result.processingTimeMs
     });
 
     res.json({
@@ -116,7 +122,7 @@ router.post('/analyze/:portfolioId', authMiddleware, asyncHandler(async (req, re
       message: 'Initializing analysis...'
     });
 
-    // Analyze with Style Descriptor Agent with progress callback
+    // Analyze with Ultra-Detailed Ingestion Agent with progress callback
     const result = await styleDescriptorAgent.analyzePortfolio(portfolioId, async (progress) => {
       // Update progress
       analysisProgress.set(portfolioId, {
@@ -127,20 +133,26 @@ router.post('/analyze/:portfolioId', authMiddleware, asyncHandler(async (req, re
         currentImage: progress.currentImage,
         analyzed: progress.analyzed,
         failed: progress.failed,
+        avgConfidence: progress.avgConfidence,
+        avgCompleteness: progress.avgCompleteness,
         message: `Analyzing image ${progress.current} of ${progress.total}...`,
         error: progress.error
       });
       
-      // Track interaction for continuous learning
+      // Track interaction for continuous learning (non-blocking)
       if (progress.currentImage) {
-        await continuousLearningAgent.trackInteraction(userId, uuidv4(), {
+        continuousLearningAgent.trackInteraction(userId, null, {
           event_type: 'image_analysis_progress',
           duration_ms: 1000, // Placeholder
           metadata: {
             portfolioId,
             current: progress.current,
-            total: progress.total
+            total: progress.total,
+            avgConfidence: progress.avgConfidence,
+            avgCompleteness: progress.avgCompleteness
           }
+        }).catch(err => {
+          logger.warn('Failed to track progress interaction', { error: err.message });
         });
       }
     });
@@ -153,6 +165,8 @@ router.post('/analyze/:portfolioId', authMiddleware, asyncHandler(async (req, re
       percentage: 100,
       analyzed: result.analyzed,
       failed: result.failed,
+      avgConfidence: result.avgConfidence,
+      avgCompleteness: result.avgCompleteness,
       message: 'Analysis complete!'
     });
 
@@ -165,6 +179,8 @@ router.post('/analyze/:portfolioId', authMiddleware, asyncHandler(async (req, re
       data: {
         analyzed: result.analyzed,
         failed: result.failed,
+        avgConfidence: result.avgConfidence,
+        avgCompleteness: result.avgCompleteness,
         descriptors: result.descriptors.length
       }
     });
@@ -262,45 +278,77 @@ router.post('/profile/generate/:portfolioId', authMiddleware, asyncHandler(async
 router.get('/profile', authMiddleware, asyncHandler(async (req, res) => {
   const userId = req.user.id;
 
-  const profile = await trendAnalysisAgent.getStyleProfile(userId);
+  try {
+    logger.info('Podna: Fetching style profile', { userId });
 
-  if (!profile) {
-    return res.status(404).json({
+    const profile = await trendAnalysisAgent.getStyleProfile(userId);
+
+    if (!profile) {
+      logger.warn('Podna: No style profile found', { userId });
+      return res.status(404).json({
+        success: false,
+        message: 'No style profile found. Please upload a portfolio first.'
+      });
+    }
+
+    // Get portfolio images
+    const imagesQuery = `
+      SELECT pi.id, pi.filename, pi.url_original as url, pi.width, pi.height, pi.created_at as uploaded_at
+      FROM portfolio_images pi
+      WHERE pi.portfolio_id = $1
+      ORDER BY pi.created_at DESC
+    `;
+    const imagesResult = await db.query(imagesQuery, [profile.portfolio_id]);
+
+    // Parse JSON fields (they're stored as strings in DB)
+    const parseJSON = (field) => {
+      try {
+        return typeof field === 'string' ? JSON.parse(field) : field;
+      } catch (e) {
+        logger.warn('Failed to parse JSON field', { error: e.message });
+        return field;
+      }
+    };
+
+    logger.info('Podna: Style profile fetched successfully', { 
+      userId, 
+      profileId: profile.id,
+      imageCount: imagesResult.rows.length 
+    });
+
+    res.json({
+      success: true,
+      data: {
+        profile: {
+          id: profile.id,
+          portfolioId: profile.portfolio_id,
+          styleLabels: parseJSON(profile.style_labels),
+          clusters: parseJSON(profile.clusters),
+          summaryText: profile.summary_text,
+          totalImages: profile.total_images,
+          distributions: {
+            garments: parseJSON(profile.garment_distribution),
+            colors: parseJSON(profile.color_distribution),
+            fabrics: parseJSON(profile.fabric_distribution),
+            silhouettes: parseJSON(profile.silhouette_distribution)
+          },
+          updatedAt: profile.updated_at,
+          portfolioImages: imagesResult.rows
+        }
+      }
+    });
+  } catch (error) {
+    logger.error('Podna: Profile fetch failed', { 
+      userId, 
+      error: error.message,
+      stack: error.stack 
+    });
+    
+    res.status(500).json({
       success: false,
-      message: 'No style profile found. Please upload a portfolio first.'
+      message: error.message || 'Failed to fetch style profile'
     });
   }
-
-  // Get portfolio images
-  const imagesQuery = `
-    SELECT pi.id, pi.filename, pi.url_original as url, pi.width, pi.height, pi.uploaded_at
-    FROM portfolio_images pi
-    WHERE pi.portfolio_id = $1
-    ORDER BY pi.uploaded_at DESC
-  `;
-  const imagesResult = await db.query(imagesQuery, [profile.portfolio_id]);
-
-  res.json({
-    success: true,
-    data: {
-      profile: {
-        id: profile.id,
-        portfolioId: profile.portfolio_id,
-        styleLabels: profile.style_labels,
-        clusters: profile.clusters,
-        summaryText: profile.summary_text,
-        totalImages: profile.total_images,
-        distributions: {
-          garments: profile.garment_distribution,
-          colors: profile.color_distribution,
-          fabrics: profile.fabric_distribution,
-          silhouettes: profile.silhouette_distribution
-        },
-        updatedAt: profile.updated_at,
-        portfolioImages: imagesResult.rows
-      }
-    }
-  });
 }));
 
 /**
@@ -323,10 +371,10 @@ router.get('/portfolio/:portfolioId/images', authMiddleware, asyncHandler(async 
   }
 
   const imagesQuery = `
-    SELECT id, filename, url_original as url, width, height, uploaded_at
+    SELECT id, filename, url_original as url, width, height, created_at as uploaded_at
     FROM portfolio_images
     WHERE portfolio_id = $1
-    ORDER BY uploaded_at DESC
+    ORDER BY created_at DESC
   `;
   const imagesResult = await db.query(imagesQuery, [portfolioId]);
 
@@ -411,8 +459,18 @@ router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
   logger.info('Podna: Generating image', { userId, mode, provider });
 
   try {
-    // Generate prompt with Advanced Prompt Builder Agent using Thompson Sampling
-    const prompt = await promptBuilderAgent.generatePrompt(userId, { mode, constraints });
+    // Generate prompt with A/B testing router
+    // Add timestamp-based variation seed for diversity
+    const variationSeed = Date.now() % 1000;
+    
+    const prompt = await promptRouter.generatePrompt(userId, { 
+      garmentType: constraints.garment_type,
+      season: constraints.season,
+      occasion: constraints.occasion,
+      creativity: mode === 'exploratory' ? 0.7 : mode === 'creative' ? 0.5 : 0.3,
+      variationSeed: variationSeed,
+      useCache: false // Disable caching to ensure variety
+    });
 
     // Generate image with Image Generation Agent
     const generation = await imageGenerationAgent.generateImage(userId, prompt.id, { 
@@ -420,14 +478,16 @@ router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
       upscale 
     });
 
-    // Track generation interaction for continuous learning
-    await continuousLearningAgent.trackInteraction(userId, generation.id, {
+    // Track generation interaction for continuous learning (non-blocking)
+    continuousLearningAgent.trackInteraction(userId, generation.id, {
       event_type: 'image_generation',
       metadata: {
         promptId: prompt.id,
         provider,
         mode
       }
+    }).catch(err => {
+      logger.warn('Failed to track generation interaction', { error: err.message });
     });
 
     res.json({
@@ -467,15 +527,17 @@ router.post('/generate/batch', authMiddleware, asyncHandler(async (req, res) => 
   logger.info('Podna: Generating batch', { userId, count, mode });
 
   try {
+    // Update image generation agent to use A/B testing router
     const generations = await imageGenerationAgent.generateBatch(userId, count, { 
       mode, 
-      provider 
+      provider,
+      promptBuilder: promptRouter
     });
 
     const totalCost = generations.reduce((sum, g) => sum + (g.cost_cents || 0), 0);
 
-    // Track batch generation interaction for continuous learning
-    await continuousLearningAgent.trackInteraction(userId, uuidv4(), {
+    // Track batch generation interaction for continuous learning (non-blocking)
+    continuousLearningAgent.trackInteraction(userId, null, {
       event_type: 'batch_generation',
       metadata: {
         count,
@@ -483,6 +545,8 @@ router.post('/generate/batch', authMiddleware, asyncHandler(async (req, res) => 
         provider,
         actualCount: generations.length
       }
+    }).catch(err => {
+      logger.warn('Failed to track batch generation interaction', { error: err.message });
     });
 
     res.json({
@@ -558,6 +622,32 @@ router.post('/feedback', authMiddleware, asyncHandler(async (req, res) => {
       type, 
       note 
     });
+
+    // Update Thompson Sampling parameters for Intelligent Prompt Builder
+    try {
+      // Get the prompt ID associated with this generation
+      const generationQuery = `SELECT prompt_id FROM generations WHERE id = $1`;
+      const generationResult = await db.query(generationQuery, [generationId]);
+      const promptId = generationResult.rows[0]?.prompt_id;
+      
+      if (promptId) {
+        // Convert feedback type to Thompson parameters
+        const feedbackParams = {
+          liked: type === 'like' || type === 'heart',
+          saved: type === 'save',
+          shared: type === 'share'
+        };
+        
+        // Update Thompson parameters
+        await intelligentPromptBuilder.updateThompsonParamsFromFeedback(userId, promptId, feedbackParams);
+      }
+    } catch (thompsonError) {
+      logger.warn('Failed to update Thompson parameters', { 
+        userId, 
+        generationId, 
+        error: thompsonError.message 
+      });
+    }
 
     // Track feedback interaction for continuous learning
     await continuousLearningAgent.trackInteraction(userId, generationId, {
@@ -648,41 +738,57 @@ router.post('/onboard', authMiddleware, upload.single('portfolio'), asyncHandler
     const uploadResult = await ingestionAgent.processZipUpload(userId, zipBuffer, filename);
     const portfolioId = uploadResult.portfolio.id;
 
-    // Track ingestion interaction
-    await continuousLearningAgent.trackInteraction(userId, uuidv4(), {
+    // Track ingestion interaction (non-blocking)
+    continuousLearningAgent.trackInteraction(userId, null, {
       event_type: 'portfolio_upload',
       metadata: {
         portfolioId,
         imageCount: uploadResult.portfolio.imageCount,
         filename
       }
+    }).catch(err => {
+      logger.warn('Failed to track upload interaction', { error: err.message });
     });
 
     // Step 2: Analyze images
     logger.info('Podna Onboarding: Step 2/4 - Analyzing images');
     const analysisResult = await styleDescriptorAgent.analyzePortfolio(portfolioId);
 
-    // Track analysis interaction
-    await continuousLearningAgent.trackInteraction(userId, uuidv4(), {
+    // Track analysis interaction (non-blocking)
+    continuousLearningAgent.trackInteraction(userId, null, {
       event_type: 'portfolio_analysis',
       metadata: {
         portfolioId,
         analyzed: analysisResult.analyzed,
-        failed: analysisResult.failed
+        failed: analysisResult.failed,
+        avgConfidence: analysisResult.avgConfidence,
+        avgCompleteness: analysisResult.avgCompleteness
       }
+    }).catch(err => {
+      logger.warn('Failed to track analysis interaction', { error: err.message });
     });
 
     // Step 3: Generate style profile
     logger.info('Podna Onboarding: Step 3/4 - Generating style profile');
     const profile = await trendAnalysisAgent.generateStyleProfile(userId, portfolioId);
+    
+    logger.info('Podna Onboarding: Profile generated successfully', {
+      profileId: profile.id,
+      portfolioId: profile.portfolio_id,
+      totalImages: profile.total_images,
+      styleLabelsCount: Array.isArray(profile.style_labels) ? profile.style_labels.length : 'N/A',
+      clustersCount: Array.isArray(profile.clusters) ? profile.clusters.length : 'N/A'
+    });
 
-    // Track profile generation interaction
-    await continuousLearningAgent.trackInteraction(userId, uuidv4(), {
+    // Track profile generation interaction (non-blocking)
+    continuousLearningAgent.trackInteraction(userId, null, {
       event_type: 'profile_generation',
       metadata: {
         portfolioId,
         profileId: profile.id
       }
+    }).catch(err => {
+      logger.warn('Failed to track profile generation interaction', { error: err.message });
     });
 
     // Step 4: Generate initial images (optional)
@@ -693,13 +799,15 @@ router.post('/onboard', authMiddleware, upload.single('portfolio'), asyncHandler
         mode: 'exploratory' 
       });
       
-      // Track initial generation interaction
-      await continuousLearningAgent.trackInteraction(userId, uuidv4(), {
+      // Track initial generation interaction (non-blocking)
+      continuousLearningAgent.trackInteraction(userId, null, {
         event_type: 'initial_generation',
         metadata: {
           count: initialCount,
           actualCount: generations.length
         }
+      }).catch(err => {
+        logger.warn('Failed to track initial generation interaction', { error: err.message });
       });
     }
 
@@ -713,7 +821,9 @@ router.post('/onboard', authMiddleware, upload.single('portfolio'), asyncHandler
         },
         analysis: {
           analyzed: analysisResult.analyzed,
-          failed: analysisResult.failed
+          failed: analysisResult.failed,
+          avgConfidence: analysisResult.avgConfidence,
+          avgCompleteness: analysisResult.avgCompleteness
         },
         profile: {
           id: profile.id,

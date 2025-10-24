@@ -34,16 +34,16 @@ class AdvancedPromptBuilderAgent {
    * @returns {Promise<Object>} Prompt record
    */
   async generatePrompt(userId, options = {}) {
-    const { mode = 'exploratory', constraints = {}, creativity = this.CREATIVITY_LEVEL } = options;
-    
-    logger.info('Advanced Prompt Builder: Generating prompt', { userId, mode, creativity });
+    const { mode = 'exploratory', constraints = {}, creativity = this.CREATIVITY_LEVEL, variationSeed = 0 } = options;
+  
+    logger.info('Advanced Prompt Builder: Generating prompt', { userId, mode, creativity, variationSeed });
 
     // Get user style profile with tag metadata
     const profile = await this.getStyleProfileWithMetadata(userId);
-    
+  
     if (!profile) {
       logger.warn('No style profile found, using defaults', { userId });
-      return this.generateDefaultPrompt(userId, mode, constraints);
+      return this.generateDefaultPrompt(userId, mode, constraints, variationSeed);
     }
 
     // Get Thompson Sampling parameters (alpha/beta for each attribute)
@@ -55,7 +55,8 @@ class AdvancedPromptBuilderAgent {
       mode,
       constraints,
       samplingParams,
-      creativity
+      creativity,
+      variationSeed
     );
 
     // Render text prompt with weights and brackets
@@ -82,7 +83,17 @@ class AdvancedPromptBuilderAgent {
   /**
    * Generate default prompt without style profile
    */
-  async generateDefaultPrompt(userId, mode, constraints) {
+  async generateDefaultPrompt(userId, mode, constraints, variationSeed = 0) {
+    // Use seeded random for consistent variation
+    const seededRandom = (seed) => {
+      const x = Math.sin(seed) * 10000;
+      return x - Math.floor(x);
+    };
+  
+    // Create a seed based on userId and variationSeed for more uniqueness
+    const baseSeed = userId ? parseInt(userId.replace(/[^0-9]/g, '').slice(0, 8)) || 0 : 0;
+    const combinedSeed = baseSeed + variationSeed;
+
     const defaultGarments = ['dress', 'jacket', 'skirt', 'blouse', 'pants', 'coat'];
     const defaultColors = ['black', 'white', 'navy', 'beige'];
     const defaultFabrics = ['cotton', 'silk', 'wool', 'linen'];
@@ -90,24 +101,29 @@ class AdvancedPromptBuilderAgent {
 
     const spec = {
       style_mode: 'contemporary fashion',
-      garment_type: constraints.garment_type || defaultGarments[Math.floor(Math.random() * defaultGarments.length)],
-      silhouette: constraints.silhouette || defaultSilhouettes[Math.floor(Math.random() * defaultSilhouettes.length)],
-      colors: constraints.colors || [defaultColors[Math.floor(Math.random() * defaultColors.length)]],
-      fabric: constraints.fabric || defaultFabrics[Math.floor(Math.random() * defaultFabrics.length)],
-      
+      garment_type: constraints.garment_type || defaultGarments[Math.floor(seededRandom(combinedSeed * 1.1) * defaultGarments.length)],
+      silhouette: constraints.silhouette || defaultSilhouettes[Math.floor(seededRandom(combinedSeed * 1.2) * defaultSilhouettes.length)],
+      colors: constraints.colors || [defaultColors[Math.floor(seededRandom(combinedSeed * 1.3) * defaultColors.length)]],
+      fabric: constraints.fabric || defaultFabrics[Math.floor(seededRandom(combinedSeed * 1.4) * defaultFabrics.length)],
+    
       lighting: { type: 'soft', direction: '45deg' },
       camera: { angle: '3/4 front', height: 'eye level' },
       background: 'clean studio background',
-      
+    
       finish: 'polished',
       details: 'modern editorial style',
-      
+    
       weights: {
         cluster: 0.5,
-        garment: 0.5,
-        color: 0.5,
-        fabric: 0.5,
-        silhouette: 0.5
+        garment: 0.7,
+        color: 0.6,
+        fabric: 0.6,
+        silhouette: 0.6,
+        finish: 0.5,
+        lighting: 0.7,
+        camera: 0.6,
+        background: 0.5,
+        details: 0.4
       }
     };
 
@@ -123,7 +139,11 @@ class AdvancedPromptBuilderAgent {
 
     logger.info('Advanced Prompt Builder: Default prompt generated', { 
       promptId: prompt.id,
-      mode
+      mode,
+      variationSeed,
+      garmentType: spec.garment_type,
+      colors: spec.colors,
+      fabric: spec.fabric
     });
 
     return prompt;
@@ -132,53 +152,85 @@ class AdvancedPromptBuilderAgent {
   /**
    * Build prompt specification using Thompson Sampling
    */
-  async buildPromptSpecWithThompson(profile, mode, constraints, samplingParams, creativity) {
+  async buildPromptSpecWithThompson(profile, mode, constraints, samplingParams, creativity, variationSeed = 0) {
     const clusters = profile.clusters || [];
     const garmentDist = profile.garment_distribution || {};
     const colorDist = profile.color_distribution || {};
     const fabricDist = profile.fabric_distribution || {};
     const silhouetteDist = profile.silhouette_distribution || {};
 
-    // Initialize weights based on profile confidence
+    // Initialize weights based on profile confidence and importance
     const weights = {
       cluster: 1.0,
       garment: 0.8,
       color: 0.7,
-      fabric: 0.6,
-      silhouette: 0.5,
-      finish: 0.4
+      fabric: 0.7,
+      silhouette: 0.6,
+      finish: 0.5,
+      lighting: 0.7,  // Photography is important
+      camera: 0.6,     // Camera angle matters
+      background: 0.5, // Background is supporting
+      details: 0.4     // Details are subtle
     };
 
-    // Apply Thompson Sampling for attribute selection
-    const thompsonSelected = this.applyThompsonSampling(samplingParams, creativity);
+    // Apply Thompson Sampling for attribute selection with variation seed
+    const thompsonSelected = this.applyThompsonSampling(samplingParams, creativity, variationSeed);
     
-    // Select primary cluster
-    const primaryCluster = clusters[0] || { 
+    // Select cluster with variation - rotate through available clusters
+    const clusterIndex = clusters.length > 1 ? variationSeed % clusters.length : 0;
+    const primaryCluster = clusters[clusterIndex] || { 
       name: 'signature style', 
       signature_attributes: {} 
     };
 
-    // Build spec with Thompson Sampling
+    // Vary silhouettes based on seed
+    const silhouettes = ['fitted', 'structured', 'relaxed', 'oversized', 'tailored', 'flowing'];
+    const variedSilhouette = variationSeed % 3 === 0 ? silhouettes[variationSeed % silhouettes.length] : null;
+    
+    // Vary finishes
+    const finishes = ['sheen', 'matte', 'polished', 'textured', 'soft'];
+    const variedFinish = finishes[variationSeed % finishes.length];
+    
+    // Vary photography attributes
+    const lightingTypes = ['soft', 'natural', 'studio', 'dramatic'];
+    const lightingDirections = ['45deg', 'front', 'side', 'top'];
+    const cameraAngles = ['3/4 front', 'straight-on', 'profile', '3/4 back'];
+    const backgrounds = ['clean studio background', 'minimal background', 'neutral background', 'textured background'];
+    
+    const variedLighting = {
+      type: lightingTypes[variationSeed % lightingTypes.length],
+      direction: lightingDirections[(variationSeed + 1) % lightingDirections.length]
+    };
+    
+    const variedCamera = {
+      angle: cameraAngles[variationSeed % cameraAngles.length],
+      height: 'eye level'
+    };
+    
+    const variedBackground = backgrounds[variationSeed % backgrounds.length];
+
+    // Build spec with Thompson Sampling and variations
     const spec = {
       style_mode: primaryCluster.name,
       garment_type: constraints.garment_type || thompsonSelected.garment || this.weightedSelect(garmentDist),
-      silhouette: constraints.silhouette || primaryCluster.signature_attributes.silhouette || thompsonSelected.silhouette || this.weightedSelect(silhouetteDist),
+      silhouette: constraints.silhouette || variedSilhouette || primaryCluster.signature_attributes.silhouette || thompsonSelected.silhouette || this.weightedSelect(silhouetteDist),
       colors: constraints.colors || thompsonSelected.colors || this.selectTopN(colorDist, 2),
       fabric: constraints.fabric || thompsonSelected.fabric || this.weightedSelect(fabricDist),
       
-      // Photography attributes (from profile or defaults)
-      lighting: { type: 'soft', direction: '45deg' },
-      camera: { angle: '3/4 front', height: 'eye level' },
-      background: 'clean studio background',
+      // Varied photography attributes
+      lighting: variedLighting,
+      camera: variedCamera,
+      background: variedBackground,
       
-      // Additional details
-      finish: 'sheen',
+      // Varied details
+      finish: variedFinish,
       details: 'modern editorial style',
       
       weights,
       
       // Thompson Sampling info for learning
-      thompson_selection: thompsonSelected
+      thompson_selection: thompsonSelected,
+      variation_seed: variationSeed
     };
 
     logger.info('Advanced Prompt Builder: Generated prompt spec with Thompson Sampling', { 
@@ -194,18 +246,24 @@ class AdvancedPromptBuilderAgent {
   /**
    * Apply Thompson Sampling to select attributes
    */
-  applyThompsonSampling(samplingParams, creativity) {
+  applyThompsonSampling(samplingParams, creativity, variationSeed = 0) {
     const selected = {};
+    
+    // Increase exploration chance based on variation seed
+    const adjustedCreativity = Math.min(0.9, creativity + (variationSeed * 0.05));
     
     // For each category, sample from Beta distribution
     for (const [category, params] of Object.entries(samplingParams)) {
       if (Object.keys(params).length > 0) {
         // Apply creativity factor - sometimes select randomly instead of Thompson
-        if (Math.random() < creativity) {
-          // Random selection for exploration
+        // Use variationSeed to ensure different selections
+        const seedHash = (variationSeed * 97) % 100;
+        if ((seedHash / 100) < adjustedCreativity) {
+          // Random selection for exploration with seed-based variation
           const attributes = Object.keys(params);
           if (attributes.length > 0) {
-            const randomAttr = attributes[Math.floor(Math.random() * attributes.length)];
+            const index = (variationSeed + seedHash) % attributes.length;
+            const randomAttr = attributes[index];
             if (category === 'colors') {
               selected.colors = [randomAttr];
             } else {
@@ -216,8 +274,8 @@ class AdvancedPromptBuilderAgent {
           // Thompson Sampling - sample from Beta distribution
           const samples = {};
           for (const [attr, param] of Object.entries(params)) {
-            // Sample from Beta(alpha, beta) distribution
-            samples[attr] = this.sampleBeta(param.alpha, param.beta);
+            // Sample from Beta(alpha, beta) distribution with seed-based variation
+            samples[attr] = this.sampleBeta(param.alpha, param.beta, variationSeed);
           }
           
           // Select attribute with highest sample
@@ -239,7 +297,10 @@ class AdvancedPromptBuilderAgent {
    * Sample from Beta distribution using inverse transform sampling
    * This is a simplified approximation
    */
-  sampleBeta(alpha, beta) {
+  sampleBeta(alpha, beta, seed = 0) {
+    // Use seed to introduce controlled variation in sampling
+    const seedFactor = (seed * 0.01) % 1;
+    
     // For simplicity, we'll use a normal approximation for large alpha+beta
     // In practice, you would use a more accurate method
     if (alpha + beta > 100) {
@@ -249,22 +310,23 @@ class AdvancedPromptBuilderAgent {
       const stdDev = Math.sqrt(variance);
       
       // Sample from normal distribution and clamp to [0,1]
-      const sample = this.normalSample(mean, stdDev);
+      const sample = this.normalSample(mean, stdDev, seed);
       return Math.max(0, Math.min(1, sample));
     } else {
-      // For small parameters, use a simple acceptance-rejection method
-      // This is a very simplified approach
-      return Math.random(); // Placeholder
+      // For small parameters, add variation based on seed
+      return Math.max(0, Math.min(1, (Math.random() + seedFactor) / 2));
     }
   }
 
   /**
    * Simple normal distribution sample (Box-Muller transform approximation)
    */
-  normalSample(mean, stdDev) {
+  normalSample(mean, stdDev, seed = 0) {
+    // Use seed to vary the random sample
+    const seedOffset = (seed * 0.001) % 1;
     let u = 0, v = 0;
-    while(u === 0) u = Math.random(); // Converting [0,1) to (0,1)
-    while(v === 0) v = Math.random();
+    while(u === 0) u = (Math.random() + seedOffset) % 1 || 0.01; // Converting [0,1) to (0,1)
+    while(v === 0) v = (Math.random() + seedOffset * 0.5) % 1 || 0.01;
     const z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
     return mean + stdDev * z;
   }
@@ -281,19 +343,15 @@ class AdvancedPromptBuilderAgent {
     // Add garment with weight brackets for importance
     if (spec.silhouette && spec.garment_type) {
       const garmentWeight = spec.weights?.garment || 1.0;
-      if (garmentWeight > 0.8) {
+      if (garmentWeight > 0.5) {
         parts.push(`[${spec.silhouette} ${spec.garment_type}]`);
-      } else if (garmentWeight > 0.6) {
-        parts.push(`(${spec.silhouette} ${spec.garment_type})`);
       } else {
         parts.push(`${spec.silhouette} ${spec.garment_type}`);
       }
     } else if (spec.garment_type) {
       const garmentWeight = spec.weights?.garment || 1.0;
-      if (garmentWeight > 0.8) {
+      if (garmentWeight > 0.5) {
         parts.push(`[${spec.garment_type}]`);
-      } else if (garmentWeight > 0.6) {
-        parts.push(`(${spec.garment_type})`);
       } else {
         parts.push(spec.garment_type);
       }
@@ -302,10 +360,8 @@ class AdvancedPromptBuilderAgent {
     // Add fabric with weight
     if (spec.fabric) {
       const fabricWeight = spec.weights?.fabric || 0.6;
-      if (fabricWeight > 0.8) {
+      if (fabricWeight > 0.5) {
         parts.push(`[in ${spec.fabric}]`);
-      } else if (fabricWeight > 0.6) {
-        parts.push(`(in ${spec.fabric})`);
       } else {
         parts.push(`in ${spec.fabric}`);
       }
@@ -314,10 +370,8 @@ class AdvancedPromptBuilderAgent {
     // Add finish
     if (spec.finish) {
       const finishWeight = spec.weights?.finish || 0.5;
-      if (finishWeight > 0.8) {
+      if (finishWeight > 0.5) {
         parts.push(`[with ${spec.finish} finish]`);
-      } else if (finishWeight > 0.6) {
-        parts.push(`(with ${spec.finish} finish)`);
       } else {
         parts.push(`with ${spec.finish} finish`);
       }
@@ -327,33 +381,53 @@ class AdvancedPromptBuilderAgent {
     if (spec.colors && spec.colors.length > 0) {
       const colorWeight = spec.weights?.color || 0.7;
       const colorText = `${spec.colors.join(' and ')} palette`;
-      if (colorWeight > 0.8) {
+      if (colorWeight > 0.5) {
         parts.push(`[${colorText}]`);
-      } else if (colorWeight > 0.6) {
-        parts.push(`(${colorText})`);
       } else {
         parts.push(colorText);
       }
     }
 
-    // Add lighting
+    // Add lighting with weight
     if (spec.lighting) {
-      parts.push(`${spec.lighting.type} lighting from ${spec.lighting.direction}`);
+      const lightingWeight = spec.weights?.lighting || 0.7;
+      const lightingText = `${spec.lighting.type} lighting from ${spec.lighting.direction}`;
+      if (lightingWeight > 0.5) {
+        parts.push(`[${lightingText}]`);
+      } else {
+        parts.push(lightingText);
+      }
     }
 
-    // Add camera angle
+    // Add camera angle with weight
     if (spec.camera) {
-      parts.push(`${spec.camera.angle} angle at ${spec.camera.height}`);
+      const cameraWeight = spec.weights?.camera || 0.6;
+      const cameraText = `${spec.camera.angle} angle at ${spec.camera.height}`;
+      if (cameraWeight > 0.5) {
+        parts.push(`[${cameraText}]`);
+      } else {
+        parts.push(cameraText);
+      }
     }
 
-    // Add background
+    // Add background with weight
     if (spec.background) {
-      parts.push(spec.background);
+      const backgroundWeight = spec.weights?.background || 0.5;
+      if (backgroundWeight > 0.5) {
+        parts.push(`[${spec.background}]`);
+      } else {
+        parts.push(spec.background);
+      }
     }
 
-    // Add details
+    // Add details with weight
     if (spec.details) {
-      parts.push(spec.details);
+      const detailsWeight = spec.weights?.details || 0.4;
+      if (detailsWeight > 0.5) {
+        parts.push(`[${spec.details}]`);
+      } else {
+        parts.push(spec.details);
+      }
     }
 
     return parts.join(', ');
@@ -392,18 +466,23 @@ class AdvancedPromptBuilderAgent {
    */
   async savePrompt(userId, promptData) {
     const query = `
-      INSERT INTO prompts (user_id, text, json_spec, mode, weights, creativity)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO prompts (user_id, text, json_spec, mode, weights)
+      VALUES ($1, $2, $3, $4, $5)
       RETURNING *
     `;
+
+    // Include creativity in weights JSON if provided
+    const weights = {
+      ...promptData.weights,
+      ...(promptData.creativity !== undefined && { creativity: promptData.creativity })
+    };
 
     const result = await db.query(query, [
       userId,
       promptData.text,
       JSON.stringify(promptData.json_spec),
       promptData.mode,
-      JSON.stringify(promptData.weights),
-      promptData.creativity || null
+      JSON.stringify(weights)
     ]);
 
     return result.rows[0];

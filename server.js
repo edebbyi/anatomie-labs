@@ -61,13 +61,20 @@ app.use(helmet({
   }
 }));
 
-// Rate limiting
+// Rate limiting - more permissive for onboarding flows
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+  max: 500, // Increased from 100 to 500 for onboarding polling
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    // Skip rate limiting for progress checks and profile fetches
+    return req.path.includes('/progress') || req.path.includes('/profile');
+  }
 });
 app.use(limiter);
 
+// CORS middleware with preflight handling
 app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps or curl requests)
@@ -80,8 +87,12 @@ app.use(cors({
     const msg = `CORS Error: Origin ${origin} not allowed. Allowed origins: ${allowedOrigins.join(', ')}`;
     return callback(new Error(msg), false);
   },
-  credentials: true
+  credentials: true,
+  optionsSuccessStatus: 200 // Some legacy browsers (IE11, various SmartTVs) choke on 204
 }));
+
+// Handle preflight requests for all routes
+app.options('*', cors());
 
 // Body parsing middleware
 app.use(express.json({ limit: '100mb' }));

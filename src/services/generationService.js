@@ -1,6 +1,6 @@
 const vltService = require('./vltService');
 const promptEnhancementService = require('./promptEnhancementService');
-const promptGenerationService = require('./promptGenerationService');
+const promptGenerationService = require('./IntelligentPromptBuilder');
 const personaService = require('./personaService');
 const routingService = require('./modelRoutingService');
 const rlhfService = require('./rlhfService');
