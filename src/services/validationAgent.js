@@ -236,7 +236,14 @@ class ValidationAgent {
   validateLogicalConsistency(descriptor) {
     const issues = [];
     const corrections = {};
-    
+
+    // Add garment type validation
+    const garmentValidation = this.validateGarmentType(descriptor);
+    if (!garmentValidation.isValid) {
+      issues.push(...garmentValidation.issues);
+      Object.assign(corrections, garmentValidation.corrections);
+    }
+
     // Check for mutually exclusive garment types
     const garmentType = descriptor.garment_type;
     if (garmentType) {
@@ -269,6 +276,161 @@ class ValidationAgent {
     return {
       isValid: issues.length === 0,
       confidence: issues.length === 0 ? 1.0 : 1.0 - (issues.length * 0.2),
+      issues,
+      corrections
+    };
+  }
+
+  /**
+   * Validate garment type classification to prevent misclassification
+   * Specifically catches blazer misclassifications
+   */
+  validateGarmentType(descriptor) {
+    const issues = [];
+    const corrections = {};
+
+    // Get garment type from descriptor - handle both old and new schema
+    const garmentType = (descriptor.garment_type ||
+                         descriptor.garments?.[0]?.type ||
+                         '').toLowerCase().trim();
+
+    if (!garmentType) {
+      // No garment type provided - low severity issue
+      issues.push({
+        type: 'missing_garment_type',
+        message: 'No garment type specified',
+        severity: 'low'
+      });
+      return {
+        isValid: true, // Don't fail validation
+        confidence: 0.8,
+        issues,
+        corrections
+      };
+    }
+
+    // Get collar type - handle both schemas
+    const collar = (descriptor.design_details?.collar ||
+                    descriptor.garments?.[0]?.design_details?.collar ||
+                    '').toLowerCase();
+
+    // Get sleeve length - handle both schemas
+    const sleeveLength = (descriptor.sleeve_length ||
+                          descriptor.garments?.[0]?.design_details?.sleeves?.length ||
+                          '').toLowerCase();
+
+    // Get fabric - handle both schemas
+    const fabric = (descriptor.fabric?.primary_material ||
+                    descriptor.garments?.[0]?.fabric?.primary_material ||
+                    '').toLowerCase();
+
+    // Get hem finish - handle both schemas
+    const hemFinish = (descriptor.design_details?.hem?.finish ||
+                       descriptor.garments?.[0]?.design_details?.hem?.finish ||
+                       '').toLowerCase();
+
+    // Get cuff type - handle both schemas
+    const cuffType = (descriptor.design_details?.sleeves?.cuff ||
+                      descriptor.garments?.[0]?.design_details?.sleeves?.cuff ||
+                      '').toLowerCase();
+
+    logger.debug('Validating garment type', {
+      garmentType,
+      collar,
+      sleeveLength,
+      fabric,
+      hemFinish,
+      cuffType
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // RULE 1: Blazer must have lapels
+    // ═══════════════════════════════════════════════════════════════════════
+    if (garmentType.includes('blazer')) {
+      const hasLapels = collar.includes('notched') ||
+                        collar.includes('peaked') ||
+                        collar.includes('lapel');
+
+      if (!hasLapels) {
+        issues.push({
+          type: 'blazer_without_lapels',
+          message: `Classified as blazer but collar is "${collar}" (blazers must have notched or peaked lapels)`,
+          severity: 'high',
+          conflicting_attributes: ['garment_type', 'collar']
+        });
+
+        // Infer correct type based on other features
+        let correctedType = 'jacket'; // Generic fallback
+
+        // Check for bomber jacket indicators
+        if (hemFinish.includes('ribbed') || cuffType.includes('ribbed')) {
+          correctedType = 'bomber jacket';
+        }
+        // Check for shirt jacket indicators
+        else if (collar.includes('shirt') || collar.includes('point') || collar.includes('spread')) {
+          correctedType = 'shirt jacket';
+        }
+        // Check for utility jacket indicators
+        else if (collar.includes('stand') || collar === 'none') {
+          correctedType = 'utility jacket';
+        }
+        // Check for vest indicators
+        else if (sleeveLength === 'sleeveless' || sleeveLength.includes('none')) {
+          correctedType = 'vest';
+        }
+        // Check for denim jacket
+        else if (fabric.includes('denim')) {
+          correctedType = 'denim jacket';
+        }
+
+        corrections.garment_type = correctedType;
+
+        logger.warn('Blazer misclassification detected', {
+          originalType: garmentType,
+          collar,
+          correctedType
+        });
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // RULE 2: Sleeveless garments should be vests, not jackets
+    // ═══════════════════════════════════════════════════════════════════════
+    const isJacketType = garmentType.includes('jacket') || garmentType.includes('blazer');
+    const isSleeveless = sleeveLength === 'sleeveless' || sleeveLength.includes('none');
+
+    if (isJacketType && isSleeveless) {
+      issues.push({
+        type: 'sleeveless_jacket',
+        message: `Classified as ${garmentType} but is sleeveless (should be vest/gilet)`,
+        severity: 'high',
+        conflicting_attributes: ['garment_type', 'sleeve_length']
+      });
+
+      // Infer correct vest type
+      let vestType = 'vest'; // Generic fallback
+
+      if (fabric.includes('quilt') || hemFinish.includes('quilt')) {
+        vestType = 'quilted vest';
+      } else if (fabric.includes('puffer') || fabric.includes('down')) {
+        vestType = 'puffer vest';
+      } else if (garmentType.includes('moto') || fabric.includes('leather')) {
+        vestType = 'moto vest';
+      } else if (collar.includes('notched') || collar.includes('lapel')) {
+        vestType = 'tailored vest';
+      }
+
+      corrections.garment_type = vestType;
+
+      logger.warn('Sleeveless garment misclassified as jacket', {
+        originalType: garmentType,
+        correctedType: vestType
+      });
+    }
+
+    return {
+      isValid: issues.length === 0,
+      confidence: issues.length === 0 ? 1.0 : Math.max(0.5, 1.0 - (issues.length * 0.15)),
       issues,
       corrections
     };
