@@ -1,18 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Image, 
-  Sliders, 
-  X, 
-  Filter, 
-  Palette, 
-  Shirt, 
-  Tag, 
-  User, 
+import {
+  Image,
+  Sliders,
+  X,
+  Filter,
+  Palette,
+  Shirt,
+  Tag,
+  User,
   Download,
   Heart,
   Share2
 } from 'lucide-react';
 import { agentsAPI } from '../services/agentsAPI';
+import FlipCard from '../components/FlipCard';
+import ControlBar from '../components/ControlBar';
 
 interface GeneratedImage {
   id: string;
@@ -241,13 +243,14 @@ const Gallery: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-podna-surface p-4 sm:p-6 md:p-8">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-podna-surface">
+      <ControlBar imageCount={filteredImages.length} />
+      <div className="max-w-7xl mx-auto p-4 sm:p-6 md:p-8">
         {/* Header */}
         <div className="mb-8 sm:mb-10 md:mb-12">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div>
-              <h1 className="text-3xl sm:text-4xl font-light text-gray-900 mb-2">Your Gallery</h1>
+              <h2 className="text-2xl sm:text-3xl font-light text-gray-900 mb-2">Gallery</h2>
               <p className="text-gray-600">Browse and filter your generated designs</p>
             </div>
             <div className="flex items-center gap-3">
@@ -503,45 +506,30 @@ const Gallery: React.FC = () => {
         
         {/* Gallery Grid */}
         {filteredImages.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-5">
             {filteredImages.map((image) => (
-              <div key={image.id} className="group animate-fade-in stagger-1">
-                <div className="aspect-square bg-gray-100 rounded-2xl overflow-hidden mb-3 relative shadow-airbnb-card transition-all duration-300 hover:shadow-airbnb-card-hover">
-                  <img
-                    src={image.url}
-                    alt={image.prompt}
-                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                  />
-                  
-                  {/* Hover Overlay with Actions - Only Share icon for liked images */}
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all duration-300 flex items-center justify-center opacity-0 group-hover:opacity-100">
-                    <div className="flex gap-3">
-                      <button className="p-3 bg-white rounded-full hover:bg-gray-100 transition-all transform hover:scale-105 shadow-lg">
-                        <Share2 className="w-5 h-5 text-gray-900" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="space-y-1.5">
-                  <p className="text-sm text-gray-600 line-clamp-2">{image.prompt}</p>
-                  {image.metadata && (
-                    <div className="flex flex-wrap gap-1">
-                      {image.metadata.colors?.slice(0, 3).map((color, idx) => (
-                        <span 
-                          key={idx} 
-                          className="px-2 py-1 bg-gray-100 text-gray-600 rounded-full text-xs capitalize"
-                        >
-                          {color}
-                        </span>
-                      ))}
-                      {image.metadata.garmentType && (
-                        <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-full text-xs capitalize">
-                          {image.metadata.garmentType}
-                        </span>
-                      )}
-                    </div>
-                  )}
+              <div
+                key={image.id}
+                className="relative aspect-[3/4] rounded-2xl overflow-hidden shadow-airbnb-card transition-all duration-300 hover:shadow-airbnb-card-hover cursor-pointer group"
+              >
+                <FlipCard
+                  imageUrl={image.url}
+                  prompt={image.prompt}
+                  timestamp={new Date(image.timestamp)}
+                  metadata={image.metadata}
+                />
+                {/* Hover Overlay */}
+                <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-4">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      // TODO: Add to favorites
+                    }}
+                    className="ml-auto text-white text-2xl hover:scale-110 transition-transform"
+                    aria-label="Add to favorites"
+                  >
+                    ♡
+                  </button>
                 </div>
               </div>
             ))}
