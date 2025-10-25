@@ -15,6 +15,8 @@ import {
 import { agentsAPI } from '../services/agentsAPI';
 import FlipCard from '../components/FlipCard';
 import ControlBar from '../components/ControlBar';
+import Lightbox from '../components/Lightbox';
+import SkeletonLoader from '../components/SkeletonLoader';
 
 interface GeneratedImage {
   id: string;
@@ -53,6 +55,7 @@ const Gallery: React.FC = () => {
   
   // UI states
   const [showFilters, setShowFilters] = useState(false);
+  const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
 
   // Load generated images
   useEffect(() => {
@@ -505,12 +508,15 @@ const Gallery: React.FC = () => {
         )}
         
         {/* Gallery Grid */}
-        {filteredImages.length > 0 ? (
+        {loading ? (
+          <SkeletonLoader count={8} columns={4} />
+        ) : filteredImages.length > 0 ? (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-5">
-            {filteredImages.map((image) => (
+            {filteredImages.map((image, index) => (
               <div
                 key={image.id}
                 className="relative aspect-[3/4] rounded-2xl overflow-hidden shadow-airbnb-card transition-all duration-300 hover:shadow-airbnb-card-hover cursor-pointer group"
+                onClick={() => setSelectedImageIndex(index)}
               >
                 <FlipCard
                   imageUrl={image.url}
@@ -548,6 +554,15 @@ const Gallery: React.FC = () => {
                 : 'Generate your first design using the prompt builder. Your images will appear here.'}
             </p>
           </div>
+        )}
+
+        {/* Lightbox Modal */}
+        {selectedImageIndex !== null && (
+          <Lightbox
+            images={filteredImages}
+            initialIndex={selectedImageIndex}
+            onClose={() => setSelectedImageIndex(null)}
+          />
         )}
       </div>
     </div>
