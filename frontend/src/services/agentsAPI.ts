@@ -112,6 +112,25 @@ export interface GeneratedImage {
   brand_dna_applied?: boolean;
 }
 
+export interface PodnaGeneratedImage {
+  id: string;
+  url: string;
+  promptText: string;
+  promptSpec: any;
+  provider: string;
+  costCents: number;
+  createdAt: string;
+  brand_consistency_score?: number;
+  brand_dna_applied?: boolean;
+  metadata?: {
+    colors?: string[];
+    garmentType?: string;
+    styleTags?: string[];
+    silhouette?: string;
+    fabric?: string;
+  };
+}
+
 export interface BatchStatus {
   batch_id: string;
   designer_id: string;
@@ -471,6 +490,29 @@ export const agentsAPI = {
   smartGenerate: generationAPI.smartGenerate,
   getBatchStatus: generationAPI.getBatchStatus,
   getUserImages: generationAPI.getUserImages,
+  
+  // Gallery
+  getGeneratedImages: async () => {
+    try {
+      const token = localStorage.getItem('authToken');
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
+      
+      const response = await fetch(`${apiUrl}/podna/gallery`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch generated images');
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error fetching generated images:', error);
+      throw error;
+    }
+  },
   
   // Feedback
   submitFeedback: feedbackAPI.submit,

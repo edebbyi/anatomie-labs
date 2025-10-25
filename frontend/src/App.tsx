@@ -6,6 +6,7 @@ import Signup from './pages/Signup';
 import Onboarding from './pages/Onboarding';
 import Home from './pages/Home';
 import Generation from './pages/Generation';
+import Gallery from './pages/Gallery';
 import StyleProfile from './pages/StyleProfile';
 import Settings from './pages/Settings';
 import Analytics from './pages/Analytics';
@@ -31,6 +32,7 @@ function App() {
             <Routes>
               <Route path="/home" element={<Home />} />
               <Route path="/generate" element={<Generation />} />
+              <Route path="/gallery" element={<Gallery />} />
               <Route path="/style-profile" element={<StyleProfile />} />
               <Route path="/settings" element={<Settings />} />
               

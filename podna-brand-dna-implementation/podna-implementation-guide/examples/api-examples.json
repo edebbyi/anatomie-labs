@@ -1,0 +1,156 @@
+{
+  "examples": [
+    {
+      "name": "Upload Portfolio",
+      "endpoint": "POST /api/podna/portfolio/upload",
+      "curl": "curl -X POST https://api.podna.com/api/podna/portfolio/upload \\\n  -H \"Authorization: Bearer YOUR_TOKEN\" \\\n  -F \"portfolio=@portfolio.zip\"",
+      "response": {
+        "success": true,
+        "data": {
+          "portfolioId": "portfolio-abc123",
+          "imageCount": 23,
+          "status": "analyzing"
+        }
+      }
+    },
+    {
+      "name": "Get Style Profile with Brand DNA",
+      "endpoint": "GET /api/podna/profile",
+      "curl": "curl -X GET https://api.podna.com/api/podna/profile \\\n  -H \"Authorization: Bearer YOUR_TOKEN\"",
+      "response": {
+        "success": true,
+        "data": {
+          "profile": {
+            "aestheticThemes": [
+              {
+                "name": "sporty-chic",
+                "strength": 0.67,
+                "frequency": "67%"
+              }
+            ]
+          },
+          "brandDNA": {
+            "primaryAesthetic": "sporty-chic",
+            "signatureColors": [
+              {"name": "navy", "weight": 0.35, "hex": "#1a2b4c"}
+            ],
+            "confidence": {
+              "overall": 0.87
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Generate with Brand DNA (Simple)",
+      "endpoint": "POST /api/podna/generate-with-dna",
+      "curl": "curl -X POST https://api.podna.com/api/podna/generate-with-dna \\\n  -H \"Authorization: Bearer YOUR_TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"prompt\": \"black blazer\",\n    \"enforceBrandDNA\": true,\n    \"count\": 4\n  }'",
+      "response": {
+        "success": true,
+        "data": {
+          "generations": [
+            {
+              "id": "gen-1",
+              "url": "https://cdn.podna.ai/gen-1.jpg",
+              "brand_consistency_score": 0.89
+            }
+          ],
+          "avgBrandConsistency": 0.89
+        }
+      }
+    },
+    {
+      "name": "Generate with Brand DNA (Advanced)",
+      "endpoint": "POST /api/podna/generate-with-dna",
+      "curl": "curl -X POST https://api.podna.com/api/podna/generate-with-dna \\\n  -H \"Authorization: Bearer YOUR_TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"prompt\": \"navy dress with princess seams\",\n    \"enforceBrandDNA\": true,\n    \"brandDNAStrength\": 0.7,\n    \"creativity\": 0.5,\n    \"count\": 8\n  }'",
+      "response": {
+        "success": true,
+        "data": {
+          "generations": [
+            {
+              "id": "gen-1",
+              "url": "https://cdn.podna.ai/gen-1.jpg",
+              "brand_consistency_score": 0.92,
+              "metadata": {
+                "matched_brand_elements": [
+                  "navy color",
+                  "princess seams",
+                  "structured silhouette"
+                ]
+              }
+            }
+          ],
+          "prompt": {
+            "positive_prompt": "(in the designer's signature 'sporty-chic' aesthetic:1.3), (navy wool dress:1.3)..."
+          },
+          "avgBrandConsistency": 0.88
+        }
+      }
+    },
+    {
+      "name": "Generate WITHOUT Brand DNA",
+      "endpoint": "POST /api/podna/generate-with-dna",
+      "curl": "curl -X POST https://api.podna.com/api/podna/generate-with-dna \\\n  -H \"Authorization: Bearer YOUR_TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"prompt\": \"red leather jacket\",\n    \"enforceBrandDNA\": false,\n    \"creativity\": 0.8,\n    \"count\": 4\n  }'",
+      "response": {
+        "success": true,
+        "data": {
+          "generations": [
+            {
+              "id": "gen-1",
+              "url": "https://cdn.podna.ai/gen-1.jpg",
+              "brand_consistency_score": 0.42,
+              "brand_dna_applied": false
+            }
+          ],
+          "avgBrandConsistency": 0.45
+        }
+      }
+    },
+    {
+      "name": "Submit Positive Feedback",
+      "endpoint": "POST /api/podna/feedback",
+      "curl": "curl -X POST https://api.podna.com/api/podna/feedback \\\n  -H \"Authorization: Bearer YOUR_TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"generationId\": \"gen-xyz789\",\n    \"type\": \"like\"\n  }'",
+      "response": {
+        "success": true,
+        "data": {
+          "feedbackId": "feedback-123",
+          "thompsonParamsUpdated": true
+        }
+      }
+    },
+    {
+      "name": "Submit Feedback with Critique",
+      "endpoint": "POST /api/podna/feedback",
+      "curl": "curl -X POST https://api.podna.com/api/podna/feedback \\\n  -H \"Authorization: Bearer YOUR_TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"generationId\": \"gen-xyz789\",\n    \"type\": \"dislike\",\n    \"note\": \"Too much embellishment, prefer clean lines\"\n  }'",
+      "response": {
+        "success": true,
+        "data": {
+          "feedbackId": "feedback-124",
+          "parsedCritique": {
+            "embellishments": "minimal",
+            "design_style": "clean lines"
+          },
+          "thompsonParamsUpdated": true
+        }
+      }
+    },
+    {
+      "name": "Get Brand Consistency Breakdown",
+      "endpoint": "GET /api/podna/brand-consistency/:id",
+      "curl": "curl -X GET https://api.podna.com/api/podna/brand-consistency/gen-xyz789 \\\n  -H \"Authorization: Bearer YOUR_TOKEN\"",
+      "response": {
+        "success": true,
+        "data": {
+          "overallScore": 0.89,
+          "breakdown": {
+            "aesthetic": {"score": 0.95, "matched": "sporty-chic"},
+            "colors": {"score": 0.85, "matched": ["navy", "white"]},
+            "fabric": {"score": 1.0, "matched": "wool"},
+            "construction": {"score": 0.85, "matched": ["princess seams"]},
+            "photography": {"score": 0.90}
+          }
+        }
+      }
+    }
+  ]
+}

@@ -6,7 +6,12 @@ Open your terminal and run:
 
 ```bash
 cd /Users/esosaimafidon/Documents/GitHub/anatomie-lab
+
+# Standard development server (may encounter port conflicts)
 npm run dev
+
+# Enhanced development server (handles port conflicts automatically)
+npm run dev:enhanced
 ```
 
 **Expected Output:**
@@ -121,6 +126,12 @@ redis-cli ping
 ```bash
 # Find and kill process on port 3001
 lsof -ti:3001 | xargs kill -9
+
+# Or use our enhanced development script which handles this automatically
+npm run dev:enhanced
+
+# Check what processes are using common development ports
+./scripts/check-ports.sh
 ```
 
 ---

@@ -24,7 +24,11 @@ cp .env.podna.example .env
 
 ### 3. Start Server
 ```bash
+# Standard development server (may encounter port conflicts)
 npm run dev
+
+# Enhanced development server (handles port conflicts automatically)
+npm run dev:enhanced
 ```
 
 Server starts on `http://localhost:3001`

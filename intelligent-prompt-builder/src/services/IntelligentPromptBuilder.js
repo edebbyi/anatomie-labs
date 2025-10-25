@@ -518,7 +518,7 @@ class IntelligentPromptBuilder {
    * Generate default prompt (fallback)
    */
   async generateDefaultPrompt(userId, options) {
-    const garmentTypes = ['blazer', 'dress', 'coat', 'skirt', 'pants'];
+    const garmentTypes = ['blazer', 'dress', 'coat', 'skirt', 'pants', 'outfit'];
     const colors = ['navy', 'black', 'white', 'beige', 'charcoal'];
     const fabrics = ['wool', 'cotton', 'silk', 'linen'];
 

@@ -15,7 +15,7 @@ const ValidationAgent = require('./validationAgent');
 
 // Controlled vocabulary (same as before but with stricter validation)
 const FASHION_ENUMS = {
-  garment_type: ['dress', 'blazer', 'pants', 'skirt', 'coat', 'jacket', 'top', 'blouse', 'shirt', 'sweater', 'cardigan', 'shorts', 'jeans', 'chinos', 'suit', 'jumpsuit', 'romper', 'two-piece', 'co-ord', 'matching set'],
+  garment_type: ['dress', 'blazer', 'pants', 'skirt', 'coat', 'jacket', 'top', 'blouse', 'shirt', 'sweater', 'cardigan', 'shorts', 'jeans', 'chinos', 'suit', 'jumpsuit', 'romper', 'two-piece', 'co-ord', 'matching set', 'outfit'],
   silhouette: ['a-line', 'straight', 'oversized', 'fitted', 'relaxed', 'bodycon', 'empire', 'shift', 'wrap', 'peplum', 'balloon', 'pencil'],
   fit: ['tailored', 'relaxed', 'slim', 'oversized', 'regular', 'loose', 'tight', 'custom'],
   neckline: ['crew', 'v-neck', 'halter', 'boat', 'scoop', 'square', 'sweetheart', 'off-shoulder', 'turtleneck', 'cowl', 'one-shoulder'],

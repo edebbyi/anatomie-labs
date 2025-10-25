@@ -338,7 +338,7 @@ class StyleTaggerAgent {
     // Fallback: infer from design elements or provide defaults
     const defaults = [
       'dress', 'jacket', 'blazer', 'coat', 'top', 'blouse',
-      'skirt', 'pants', 'suit', 'gown', 'ensemble', 'cardigan'
+      'skirt', 'pants', 'suit', 'gown', 'ensemble', 'cardigan', 'outfit'
     ];
     
     logger.info('No garment types in profile, using defaults');

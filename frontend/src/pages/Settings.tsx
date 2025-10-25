@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, LogOut, Upload, Camera, X } from 'lucide-react';
+import { User, LogOut, Upload, Camera, X, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import authAPI from '../services/authAPI';
 
@@ -18,6 +18,9 @@ const Settings: React.FC = () => {
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     loadProfile();
@@ -118,6 +121,22 @@ const Settings: React.FC = () => {
       alert('Failed to save settings');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (deleteConfirmation !== 'DELETE') {
+      alert('Please type DELETE to confirm');
+      return;
+    }
+    
+    setIsDeleting(true);
+    try {
+      await authAPI.deleteAccount();
+      navigate('/login');
+    } catch (error) {
+      alert('Failed to delete account. Please try again.');
+      setIsDeleting(false);
     }
   };
 
@@ -282,8 +301,64 @@ const Settings: React.FC = () => {
             <LogOut className="w-5 h-5" />
             Sign Out
           </button>
+          
+          <button
+            onClick={() => setShowDeleteModal(true)}
+            className="w-full py-3 bg-white text-red-600 rounded-lg border border-red-300 hover:bg-red-50 flex items-center justify-center gap-2"
+          >
+            <Trash2 className="w-5 h-5" />
+            Delete Account
+          </button>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-md w-full p-6 space-y-4">
+            <div>
+              <h3 className="text-xl font-medium text-gray-900">Delete Account</h3>
+            </div>
+            
+            <div className="text-gray-600">
+              This action cannot be undone. Your account and all data will be permanently deleted after 30 days.
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Type DELETE to confirm
+              </label>
+              <input
+                type="text"
+                value={deleteConfirmation}
+                onChange={(e) => setDeleteConfirmation(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-gray-900"
+                placeholder="DELETE"
+              />
+            </div>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowDeleteModal(false);
+                  setDeleteConfirmation('');
+                }}
+                className="flex-1 py-3 bg-white text-gray-700 rounded-lg border border-gray-300 hover:bg-gray-50"
+                disabled={isDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteAccount}
+                className="flex-1 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+                disabled={isDeleting || deleteConfirmation !== 'DELETE'}
+              >
+                {isDeleting ? 'Deleting...' : 'Delete Account'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

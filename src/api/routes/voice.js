@@ -450,7 +450,7 @@ function normalizeGarmentType(garmentType) {
     'coats': 'coat',
     'suits': 'suit',
     'gowns': 'gown',
-    'outfits': 'outfit'
+    'outfits': 'outfit'  // This mapping is correct
   };
   
   return mappings[garmentType] || garmentType;
@@ -460,6 +460,11 @@ function generateVLTSpecification(params) {
   const { garmentType, styles, colors, fabrics, occasions } = params;
   
   let specification = garmentType;
+  
+  // Special handling for 'outfit' to make it more descriptive
+  if (garmentType === 'outfit') {
+    specification = 'fashion outfit'; // Make it more descriptive for image generation
+  }
   
   if (styles.length > 0) {
     specification = `${styles.join(' ')} ${specification}`;

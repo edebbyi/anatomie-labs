@@ -173,7 +173,7 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3001;
 
 // Initialize database and start server
 const startServer = async () => {
@@ -203,6 +203,18 @@ const startServer = async () => {
 
     // Start server
     logger.info(`About to start server on port ${PORT}...`);
+    
+    // Handle specific server errors
+    server.on('error', (error) => {
+      if (error.code === 'EADDRINUSE') {
+        logger.error(`Port ${PORT} is already in use. Please kill the process or use a different port.`);
+        process.exit(1);
+      } else {
+        logger.error('Server error', { error: error.message });
+        throw error;
+      }
+    });
+
     server.listen(PORT, () => {
       logger.info(`🚀 Designer BFF Server running on port ${PORT}`);
       logger.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);

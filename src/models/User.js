@@ -28,9 +28,9 @@ class User {
   static async findByEmail(email) {
     const query = `
       SELECT id, email, password_hash, name, role, created_at, updated_at, 
-             last_login, is_active, email_verified
+             last_login, is_active, email_verified, deleted_at, status
       FROM users
-      WHERE email = $1 AND is_active = true
+      WHERE email = $1 AND is_active = true AND (deleted_at IS NULL OR status != 'deleted')
     `;
     
     const result = await db.query(query, [email]);
@@ -44,10 +44,10 @@ class User {
    */
   static async findById(userId) {
     const query = `
-      SELECT id, email, name, role, created_at, updated_at, 
-             last_login, is_active, email_verified
+      SELECT id, email, password_hash, name, role, created_at, updated_at, 
+             last_login, is_active, email_verified, deleted_at, status
       FROM users
-      WHERE id = $1 AND is_active = true
+      WHERE id = $1 AND is_active = true AND (deleted_at IS NULL OR status != 'deleted')
     `;
     
     const result = await db.query(query, [userId]);
@@ -63,11 +63,11 @@ class User {
     const query = `
       SELECT 
         u.id, u.email, u.name, u.role, u.created_at, u.updated_at, 
-        u.last_login, u.is_active, u.email_verified,
+        u.last_login, u.is_active, u.email_verified, u.deleted_at, u.status,
         p.style_preference, p.favorite_colors, p.preferred_fabrics
       FROM users u
       LEFT JOIN user_profiles p ON u.id = p.user_id
-      WHERE u.id = $1 AND u.is_active = true
+      WHERE u.id = $1 AND u.is_active = true AND (u.deleted_at IS NULL OR u.status != 'deleted')
     `;
     
     const result = await db.query(query, [userId]);
@@ -213,11 +213,11 @@ class User {
   static async softDelete(userId) {
     const query = `
       UPDATE users
-      SET is_active = false, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1
+      SET deleted_at = NOW(), status = $1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
     `;
     
-    await db.query(query, [userId]);
+    await db.query(query, ['deleted', userId]);
   }
 
   /**

@@ -1,21 +1,6 @@
-/**
- * Trend-Aware Suggestion Engine
- * 
- * Generates contextual AI suggestions based on:
- * - User's style profile
- * - Current seasonal trends
- * - Portfolio gap analysis
- * - Fashion trend fusion (profile + trends)
- * 
- * Suggestion Types:
- * - Seasonal: Based on current trends for the season
- * - Profile-based: Aligned with user's dominant styles
- * - Gap analysis: Fill underrepresented categories
- * - Fusion: Trending styles that match user aesthetic
- */
-
 const logger = require('../utils/logger');
 const agentService = require('./agentService');
+const db = require('./database');
 
 class TrendAwareSuggestionEngine {
   constructor() {
@@ -36,13 +21,14 @@ class TrendAwareSuggestionEngine {
   async generateSuggestions(userId, options = {}) {
     const {
       maxSuggestions = 6,
-      includeTypes = ['seasonal', 'profile', 'gap', 'fusion']
+      includeTypes = ['seasonal', 'profile', 'gap', 'fusion', 'history']
     } = options;
 
     try {
       // Fetch user data
       const styleProfile = await this.getUserStyleProfile(userId);
       const recentActivity = await this.getUserRecentActivity(userId);
+      const userHistory = await this.getUserGenerationHistory(userId);
       
       const suggestions = [];
 
@@ -74,6 +60,15 @@ class TrendAwareSuggestionEngine {
           this.trendDatabase[this.currentSeason]
         );
         suggestions.push(...fusionSuggestions);
+      }
+
+      // 5. HISTORY-BASED SUGGESTIONS (NEW: Based on past requests)
+      if (includeTypes.includes('history') && userHistory) {
+        const historySuggestions = this.generateHistoryBasedSuggestions(
+          styleProfile,
+          userHistory
+        );
+        suggestions.push(...historySuggestions);
       }
 
       // Rank and limit suggestions
@@ -255,6 +250,110 @@ class TrendAwareSuggestionEngine {
   }
 
   /**
+   * Generate history-based suggestions (NEW)
+   * Based on past user requests and generative commands
+   */
+  generateHistoryBasedSuggestions(styleProfile, userHistory) {
+    if (!userHistory || userHistory.length === 0) return [];
+
+    const suggestions = [];
+    
+    // Get most frequent garment types from history
+    const garmentTypeCounts = {};
+    const styleCounts = {};
+    const colorCounts = {};
+    
+    userHistory.forEach(item => {
+      // Count garment types
+      if (item.garmentType) {
+        garmentTypeCounts[item.garmentType] = (garmentTypeCounts[item.garmentType] || 0) + 1;
+      }
+      
+      // Count styles
+      if (item.styles && Array.isArray(item.styles)) {
+        item.styles.forEach(style => {
+          styleCounts[style] = (styleCounts[style] || 0) + 1;
+        });
+      }
+      
+      // Count colors
+      if (item.colors && Array.isArray(item.colors)) {
+        item.colors.forEach(color => {
+          colorCounts[color] = (colorCounts[color] || 0) + 1;
+        });
+      }
+    });
+    
+    // Get top 2 garment types
+    const sortedGarmentTypes = Object.entries(garmentTypeCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2);
+      
+    // Get top 2 styles
+    const sortedStyles = Object.entries(styleCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2);
+      
+    // Get top 2 colors
+    const sortedColors = Object.entries(colorCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2);
+    
+    // Generate suggestions based on frequent patterns
+    sortedGarmentTypes.forEach(([garmentType, count], index) => {
+      suggestions.push({
+        type: 'history',
+        priority: 0.7 - (index * 0.1),
+        prompt: `More ${garmentType} designs like before`,
+        command: `make me 10 ${garmentType}`,
+        reasoning: `Based on your previous requests for ${garmentType} (${count} times)`,
+        metadata: {
+          garmentType,
+          frequency: count,
+          confidence: 0.7
+        }
+      });
+    });
+    
+    // Combine styles and garment types for more specific suggestions
+    if (sortedStyles.length > 0 && sortedGarmentTypes.length > 0) {
+      const topStyle = sortedStyles[0][0];
+      const topGarment = sortedGarmentTypes[0][0];
+      
+      suggestions.push({
+        type: 'history',
+        priority: 0.65,
+        prompt: `More ${topStyle} ${topGarment} like last time`,
+        command: `make me 8 ${topStyle} ${topGarment}`,
+        reasoning: `Combine your favorite style (${topStyle}) with garment type (${topGarment})`,
+        metadata: {
+          style: topStyle,
+          garmentType: topGarment,
+          confidence: 0.65
+        }
+      });
+    }
+    
+    // Add color-based suggestions if we have style profile
+    if (styleProfile && sortedColors.length > 0) {
+      const topColor = sortedColors[0][0];
+      suggestions.push({
+        type: 'history',
+        priority: 0.6,
+        prompt: `Try ${topColor} variations - matches your preferences`,
+        command: `make me 10 ${topColor} outfits`,
+        reasoning: `Based on your frequent use of ${topColor} in past requests`,
+        metadata: {
+          color: topColor,
+          confidence: 0.6
+        }
+      });
+    }
+
+    return suggestions;
+  }
+
+  /**
    * Rank suggestions by priority and relevance
    */
   rankSuggestions(suggestions, styleProfile) {
@@ -265,6 +364,11 @@ class TrendAwareSuggestionEngine {
         
         if (suggestion.type === 'profile' || suggestion.type === 'fusion') {
           adjustedPriority += 0.1; // Boost personalized suggestions
+        }
+        
+        // Boost history-based suggestions as they're highly personalized
+        if (suggestion.type === 'history') {
+          adjustedPriority += 0.05;
         }
         
         return {
@@ -280,7 +384,7 @@ class TrendAwareSuggestionEngine {
    */
   analyzePortfolioGaps(styleProfile, recentActivity) {
     const allCategories = [
-      'dress', 'blazer', 'coat', 'pants', 'skirt', 'top', 'jumpsuit'
+      'dress', 'blazer', 'coat', 'pants', 'skirt', 'top', 'jumpsuit', 'outfit'
     ];
     
     const recentCategories = new Set(
@@ -366,6 +470,66 @@ class TrendAwareSuggestionEngine {
         error: error.message
       });
       return null;
+    }
+  }
+
+  /**
+   * Get user's generation history (NEW)
+   * Query past voice commands and generation requests
+   */
+  async getUserGenerationHistory(userId) {
+    try {
+      // Query voice commands and parsed commands from the last 60 days
+      const result = await db.query(`
+        SELECT 
+          vc.original_text,
+          vc.parsed_command,
+          vc.created_at
+        FROM voice_commands vc
+        WHERE vc.user_id = $1 
+        AND vc.created_at > NOW() - INTERVAL '60 days'
+        ORDER BY vc.created_at DESC
+        LIMIT 20
+      `, [userId]);
+
+      // Transform the data into a more usable format
+      const history = result.rows.map(row => {
+        try {
+          const parsedCommand = typeof row.parsed_command === 'string' 
+            ? JSON.parse(row.parsed_command) 
+            : row.parsed_command;
+            
+          return {
+            originalText: row.original_text,
+            garmentType: parsedCommand.garmentType,
+            styles: parsedCommand.attributes?.styles || [],
+            colors: parsedCommand.attributes?.colors || [],
+            fabrics: parsedCommand.attributes?.fabrics || [],
+            quantity: parsedCommand.quantity,
+            createdAt: row.created_at
+          };
+        } catch (parseError) {
+          logger.warn('Failed to parse voice command', {
+            userId,
+            commandId: row.id,
+            error: parseError.message
+          });
+          return null;
+        }
+      }).filter(Boolean);
+
+      logger.info('User generation history fetched', {
+        userId,
+        count: history.length
+      });
+
+      return history;
+    } catch (error) {
+      logger.warn('Failed to fetch user generation history', {
+        userId,
+        error: error.message
+      });
+      return [];
     }
   }
 

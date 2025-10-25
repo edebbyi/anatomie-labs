@@ -493,9 +493,8 @@ class ImprovedTrendAnalysisAgent {
     logger.debug('Raw average confidence', { sum, count: descriptors.length, avg });
     
     // Clamp to safe DB range for confidence scores
-    // Many deployments still have avg_confidence as DECIMAL(3,3), which cannot store 1.000
-    // Use 0.999 as an upper bound to avoid numeric overflow even on older schemas
-    const clamped = Math.min(Math.max(avg, 0), 0.999);
+    // Column is defined as DECIMAL(4,3) which allows values from 0.000 to 9.999
+    const clamped = Math.min(Math.max(avg, 0), 9.999);
     // Ensure we return a properly formatted number
     const formatted = parseFloat(clamped.toFixed(3));
     logger.debug('Final confidence value', { clamped, formatted });
@@ -536,8 +535,8 @@ class ImprovedTrendAnalysisAgent {
     logger.debug('Raw average completeness', { sum, count: descriptors.length, avg });
     
     // Clamp to safe DB range for percentages
-    // Some deployments used DECIMAL(4,2) which cannot store 100.00; cap at 99.99
-    const clamped = Math.min(Math.max(avg, 0), 99.99);
+    // Column is defined as DECIMAL(5,2) which allows values from 0.00 to 999.99
+    const clamped = Math.min(Math.max(avg, 0), 999.99);
     // Ensure we return a properly formatted number
     const formatted = parseFloat(clamped.toFixed(2));
     logger.debug('Final completeness value', { clamped, formatted });
@@ -600,15 +599,26 @@ class ImprovedTrendAnalysisAgent {
     // Validate and clamp numeric values to prevent overflow across schema variants
     let validatedAvgConfidence = parseFloat(data.avg_confidence || 0);
     if (isNaN(validatedAvgConfidence)) validatedAvgConfidence = 0;
-    // Cap at 0.999 to be safe even if column is DECIMAL(3,3)
-    validatedAvgConfidence = Math.min(Math.max(validatedAvgConfidence, 0), 0.999);
+    // Cap at 9.999 to match DECIMAL(4,3) column definition
+    validatedAvgConfidence = Math.min(Math.max(validatedAvgConfidence, 0), 9.999);
     validatedAvgConfidence = parseFloat(validatedAvgConfidence.toFixed(3));
     
     let validatedAvgCompleteness = parseFloat(data.avg_completeness || 0);
     if (isNaN(validatedAvgCompleteness)) validatedAvgCompleteness = 0;
-    // Cap at 99.99 to be safe even if column is DECIMAL(4,2)
-    validatedAvgCompleteness = Math.min(Math.max(validatedAvgCompleteness, 0), 99.99);
+    // Cap at 999.99 to match DECIMAL(5,2) column definition
+    validatedAvgCompleteness = Math.min(Math.max(validatedAvgCompleteness, 0), 999.99);
     validatedAvgCompleteness = parseFloat(validatedAvgCompleteness.toFixed(2));
+    
+    // Additional validation to ensure we have proper numeric types
+    if (typeof validatedAvgConfidence !== 'number' || !isFinite(validatedAvgConfidence)) {
+      logger.warn('avg_confidence is not a valid number, setting to 0', { value: data.avg_confidence, validated: validatedAvgConfidence });
+      validatedAvgConfidence = 0;
+    }
+    
+    if (typeof validatedAvgCompleteness !== 'number' || !isFinite(validatedAvgCompleteness)) {
+      logger.warn('avg_completeness is not a valid number, setting to 0', { value: data.avg_completeness, validated: validatedAvgCompleteness });
+      validatedAvgCompleteness = 0;
+    }
     
     const validatedData = {
       ...data,
@@ -663,8 +673,8 @@ class ImprovedTrendAnalysisAgent {
         $9, 
         $10, 
         $11, 
-        LEAST(GREATEST(trunc(CAST($12 AS numeric), 3), 0), 0.999),
-        LEAST(GREATEST(trunc(CAST($13 AS numeric), 2), 0), 99.99)
+        $12,
+        $13
       )
       ON CONFLICT (user_id) DO UPDATE SET
         portfolio_id = EXCLUDED.portfolio_id,
@@ -705,7 +715,9 @@ class ImprovedTrendAnalysisAgent {
       logger.warn('Numeric overflow on style_profiles insert, retrying with NULLs', {
         error: e.message,
         avg_confidence: validatedData.avg_confidence,
-        avg_completeness: validatedData.avg_completeness
+        avg_completeness: validatedData.avg_completeness,
+        avg_confidence_type: typeof validatedData.avg_confidence,
+        avg_completeness_type: typeof validatedData.avg_completeness
       });
       const fallbackQuery = `
         INSERT INTO style_profiles (
@@ -739,7 +751,9 @@ class ImprovedTrendAnalysisAgent {
         JSON.stringify(data.construction_patterns),
         JSON.stringify(data.signature_pieces),
         data.rich_summary,
-        data.total_images
+        data.total_images,
+        null, // avg_confidence
+        null  // avg_completeness
       ]);
     }
 

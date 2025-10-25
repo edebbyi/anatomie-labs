@@ -4,6 +4,7 @@ import {
   Home as HomeIcon,
   Sparkles,
   Palette,
+  Image as ImageIcon,
   Settings as SettingsIcon,
   Menu,
   X,
@@ -75,6 +76,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigation = [
     { name: 'Home', path: '/home', icon: HomeIcon },
     { name: 'Generate', path: '/generate', icon: Sparkles },
+    { name: 'Gallery', path: '/gallery', icon: ImageIcon },
     { name: 'Style Profile', path: '/style-profile', icon: Palette },
     { name: 'Settings', path: '/settings', icon: SettingsIcon },
   ];

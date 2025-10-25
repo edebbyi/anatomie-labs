@@ -23,6 +23,7 @@ router.post('/portfolio/upload', authMiddleware, asyncHandler(async (req, res) =
   const r2Storage = require('../../services/r2Storage');
   const path = require('path');
   const { v4: uuidv4 } = require('uuid');
+  const agentService = require('../../services/agentService');
   
   // Configure multer for ZIP upload with increased timeout
   const upload = multer({
@@ -32,13 +33,14 @@ router.post('/portfolio/upload', authMiddleware, asyncHandler(async (req, res) =
       fieldSize: 500 * 1024 * 1024
     },
     fileFilter: (req, file, cb) => {
-      if (file.mimetype === 'application/zip' || file.originalname.endsWith('.zip')) {
+      const isZip = file.mimetype === 'application/zip' || file.originalname.toLowerCase().endsWith('.zip');
+      if (isZip) {
         cb(null, true);
       } else {
         cb(new Error('Only ZIP files are allowed'));
       }
     }
-  }).single('file');
+  }).any(); // accept any field name (e.g., 'file' or 'portfolio')
   
   // Set timeout to 10 minutes for large uploads
   req.setTimeout(600000);
@@ -52,22 +54,28 @@ router.post('/portfolio/upload', authMiddleware, asyncHandler(async (req, res) =
         message: err.message
       });
     }
+
+    // Support both 'file' and 'portfolio' field names
+    let uploadedFile = req.file;
+    if (!uploadedFile && Array.isArray(req.files)) {
+      uploadedFile = req.files.find(f => (f.mimetype === 'application/zip') || f.originalname.toLowerCase().endsWith('.zip')) || null;
+    }
     
-    if (!req.file) {
+    if (!uploadedFile) {
       return res.status(400).json({
         success: false,
-        message: 'No ZIP file uploaded'
+        message: 'No ZIP file uploaded (expected form field name "file" or "portfolio")'
       });
     }
     
     try {
       logger.info(`Processing portfolio ZIP for user ${req.user.id}`, {
-        filename: req.file.originalname,
-        size: req.file.size
+        filename: uploadedFile.originalname,
+        size: uploadedFile.size
       });
       
       // Extract ZIP
-      const zip = new AdmZip(req.file.buffer);
+      const zip = new AdmZip(uploadedFile.buffer);
       const zipEntries = zip.getEntries();
       
       // Filter for image files
@@ -136,6 +144,16 @@ router.post('/portfolio/upload', authMiddleware, asyncHandler(async (req, res) =
       
       logger.info(`Uploaded ${validUrls.length} images to R2 storage`);
       
+      // Ensure agents service is available
+      const health = await agentService.healthCheck();
+      if (health.status !== 'healthy') {
+        return res.status(503).json({
+          success: false,
+          message: 'Agents service unavailable. Please start the agents-service (FastAPI) and retry.',
+          error: health.error || 'Service unhealthy'
+        });
+      }
+
       // Analyze portfolio with AI agents (Visual Analyst)
       const analysisResult = await agentService.completeOnboarding(req.user.id, validUrls);
       

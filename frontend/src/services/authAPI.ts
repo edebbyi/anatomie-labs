@@ -245,6 +245,30 @@ class AuthAPI {
       );
     }
   }
+
+  /**
+   * Delete user account
+   */
+  async deleteAccount(): Promise<void> {
+    if (!this.token) {
+      throw new Error('Not authenticated');
+    }
+
+    try {
+      await axios.delete(`${API_URL}/users/me`, {
+        headers: {
+          Authorization: `Bearer ${this.token}`
+        }
+      });
+      
+      // Clear local storage
+      this.logout();
+    } catch (error: any) {
+      throw new Error(
+        error.response?.data?.error || 'Failed to delete account'
+      );
+    }
+  }
 }
 
 const authAPI = new AuthAPI();

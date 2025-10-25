@@ -338,26 +338,26 @@ router.get('/stats', authMiddleware, asyncHandler(async (req, res) => {
  * Soft-delete current user's account and schedule permanent deletion
  */
 router.delete('/users/me', authMiddleware, asyncHandler(async (req, res) => {
-  // Soft delete the user (mark as inactive)
-  await User.softDelete(req.user.id);
-
-  // TODO: Schedule actual deletion 30 days later via a cron job/worker
-  // Example: enqueue a job with a 30-day delay to purge user data permanently
-
-  // Attempt to send confirmation email (best-effort)
   try {
-    const emailService = require('../../services/emailService');
-    if (emailService?.sendAccountDeletionScheduled) {
-      await emailService.sendAccountDeletionScheduled(req.user.email);
-    }
-  } catch (e) {
-    // Log and continue without failing the request
+    const userId = req.user.id;
+    
+    // Mark account for deletion (soft delete)
+    await db.query(
+      'UPDATE users SET deleted_at = NOW(), status = $1 WHERE id = $2',
+      ['deleted', userId]
+    );
+    
+    // Schedule actual deletion for 30 days later (implement with cron job separately)
+    
+    // Clear user session
+    res.json({ 
+      success: true, 
+      message: 'Account scheduled for deletion' 
+    });
+  } catch (error) {
+    console.error('Account deletion error:', error);
+    res.status(500).json({ error: 'Failed to delete account' });
   }
-
-  res.json({
-    success: true,
-    message: 'Account scheduled for deletion'
-  });
 }));
 
 module.exports = router;

@@ -344,6 +344,7 @@ router.get('/profile', authMiddleware, asyncHandler(async (req, res) => {
             fabrics: parseJSON(profile.fabric_distribution),
             silhouettes: parseJSON(profile.silhouette_distribution)
           },
+          styleTags: parseJSON(profile.style_tags),
           updatedAt: profile.updated_at,
           portfolioImages: imagesResult.rows
         },
@@ -484,30 +485,65 @@ router.post('/portfolio/:portfolioId/add-images', authMiddleware, upload.single(
 
 /**
  * POST /api/podna/generate
- * Generate a single image
+ * Generate a single image with optional user prompt interpretation
  */
 router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
   const userId = req.user.id;
-  const { mode = 'exploratory', constraints = {}, provider = 'imagen-4-ultra', upscale = false } = req.body;
+  const { 
+    prompt, // Add user prompt parameter
+    mode = 'exploratory', 
+    constraints = {}, 
+    provider = 'imagen-4-ultra', 
+    upscale = false,
+    interpret = true // Add interpretation flag
+  } = req.body;
 
-  logger.info('Podna: Generating image', { userId, mode, provider });
+  logger.info('Podna: Generating image', { userId, mode, provider, hasUserPrompt: !!prompt });
 
   try {
-    // Generate prompt with A/B testing router
-    // Add timestamp-based variation seed for diversity
-    const variationSeed = Date.now() % 1000;
+    let generationPrompt;
     
-    const prompt = await promptRouter.generatePrompt(userId, { 
-      garmentType: constraints.garment_type,
-      season: constraints.season,
-      occasion: constraints.occasion,
-      creativity: mode === 'exploratory' ? 0.7 : mode === 'creative' ? 0.5 : 0.3,
-      variationSeed: variationSeed,
-      useCache: false // Disable caching to ensure variety
-    });
+    // If user provided a prompt, use enhanced interpretation
+    if (prompt && interpret) {
+      // Get enhanced style profile
+      const styleProfile = await intelligentPromptBuilder.getEnhancedStyleProfile(userId);
+      
+      // Extract brand DNA
+      const brandDNA = styleProfile ? intelligentPromptBuilder.extractBrandDNA(styleProfile) : null;
+
+      logger.info('Generating with user prompt and brand DNA', {
+        userId,
+        prompt: prompt.substring(0, 50),
+        hasBrandDNA: !!brandDNA
+      });
+
+      // Generate enhanced prompt
+      const promptResult = await intelligentPromptBuilder.generatePrompt(userId, {
+        creativity: mode === 'exploratory' ? 0.7 : mode === 'creative' ? 0.5 : 0.3,
+        brandDNA,
+        enforceBrandDNA: true,
+        brandDNAStrength: 0.8,
+        userPrompt: prompt
+      });
+      
+      generationPrompt = promptResult;
+    } else {
+      // Generate prompt with A/B testing router (existing behavior)
+      // Add timestamp-based variation seed for diversity
+      const variationSeed = Date.now() % 1000;
+      
+      generationPrompt = await promptRouter.generatePrompt(userId, { 
+        garmentType: constraints.garment_type,
+        season: constraints.season,
+        occasion: constraints.occasion,
+        creativity: mode === 'exploratory' ? 0.7 : mode === 'creative' ? 0.5 : 0.3,
+        variationSeed: variationSeed,
+        useCache: false // Disable caching to ensure variety
+      });
+    }
 
     // Generate image with Image Generation Agent
-    const generation = await imageGenerationAgent.generateImage(userId, prompt.id, { 
+    const generation = await imageGenerationAgent.generateImage(userId, generationPrompt.id || generationPrompt.prompt_id, { 
       provider, 
       upscale 
     });
@@ -516,9 +552,10 @@ router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
     continuousLearningAgent.trackInteraction(userId, generation.id, {
       event_type: 'image_generation',
       metadata: {
-        promptId: prompt.id,
+        promptId: generationPrompt.id || generationPrompt.prompt_id,
         provider,
-        mode
+        mode,
+        hasUserPrompt: !!prompt
       }
     }).catch(err => {
       logger.warn('Failed to track generation interaction', { error: err.message });
@@ -531,8 +568,8 @@ router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
         generation: {
           id: generation.id,
           url: generation.url,
-          promptText: prompt.text,
-          promptSpec: prompt.json_spec,
+          promptText: generationPrompt.text || generationPrompt.positive_prompt,
+          promptSpec: generationPrompt.json_spec || generationPrompt.metadata,
           provider: generation.provider,
           costCents: generation.cost_cents,
           createdAt: generation.created_at
@@ -726,27 +763,82 @@ router.post('/generate/batch', authMiddleware, asyncHandler(async (req, res) => 
 
 /**
  * GET /api/podna/gallery
- * Get user's generated images
+ * Get user's generated images with metadata for filtering
  */
 router.get('/gallery', authMiddleware, asyncHandler(async (req, res) => {
   const userId = req.user.id;
   const limit = parseInt(req.query.limit) || 50;
 
-  const generations = await imageGenerationAgent.getUserGenerations(userId, limit);
+  // Modified to return all generated images, not just liked ones
+  const query = `
+    SELECT g.*, p.text as prompt_text, p.json_spec
+    FROM generations g
+    JOIN prompts p ON g.prompt_id = p.id
+    WHERE g.user_id = $1
+    ORDER BY g.created_at DESC
+    LIMIT $2
+  `;
+
+  const result = await db.query(query, [userId, limit]);
+  const generations = result.rows;
+
+  // Extract metadata from prompt specifications for filtering
+  const generationsWithMetadata = generations.map(g => {
+    // Extract metadata from the prompt specification
+    let metadata = {};
+    
+    if (g.json_spec && g.json_spec.thompson_selection) {
+      const selection = g.json_spec.thompson_selection;
+      
+      // Extract colors
+      if (selection.colors && Array.isArray(selection.colors)) {
+        metadata.colors = selection.colors.map(c => 
+          typeof c === 'string' ? c : (c.name || JSON.stringify(c))
+        );
+      }
+      
+      // Extract garment type
+      if (selection.garment && selection.garment.type) {
+        metadata.garmentType = selection.garment.type;
+      } else if (selection.garment && typeof selection.garment === 'string') {
+        metadata.garmentType = selection.garment;
+      }
+      
+      // Extract style tags/aesthetic
+      if (selection.styleContext) {
+        metadata.styleTags = [selection.styleContext];
+      }
+      
+      // Extract silhouette
+      if (selection.garment && selection.garment.silhouette) {
+        metadata.silhouette = selection.garment.silhouette;
+      }
+      
+      // Extract fabric
+      if (selection.fabric && selection.fabric.material) {
+        metadata.fabric = selection.fabric.material;
+      } else if (selection.fabric && typeof selection.fabric === 'string') {
+        metadata.fabric = selection.fabric;
+      }
+    }
+    
+    return {
+      id: g.id,
+      url: g.url,
+      promptText: g.prompt_text,
+      promptSpec: g.json_spec,
+      provider: g.provider,
+      costCents: g.cost_cents,
+      createdAt: g.created_at,
+      metadata: metadata
+    };
+  });
 
   res.json({
     success: true,
     data: {
-      count: generations.length,
-      generations: generations.map(g => ({
-        id: g.id,
-        url: g.url,
-        promptText: g.prompt_text,
-        promptSpec: g.json_spec,
-        provider: g.provider,
-        costCents: g.cost_cents,
-        createdAt: g.created_at
-      }))
+      count: generationsWithMetadata.length,
+      generations: generationsWithMetadata
     }
   });
 }));
@@ -1004,5 +1096,153 @@ router.post('/onboard', authMiddleware, upload.single('portfolio'), asyncHandler
     });
   }
 }));
+
+
+/**
+ * GET /api/podna/brand-consistency/:generationId
+ * Get detailed brand consistency breakdown for a generation
+ */
+router.get('/brand-consistency/:generationId', authMiddleware, asyncHandler(async (req, res) => {
+  try {
+    const { generationId } = req.params;
+    const userId = req.user.id;
+
+    // Verify ownership of the generation
+    const generationQuery = `
+      SELECT g.id, g.prompt_id, g.user_id, p.json_spec
+      FROM generations g
+      LEFT JOIN prompts p ON g.prompt_id = p.id
+      WHERE g.id = $1 AND g.user_id = $2
+    `;
+    
+    const generationResult = await db.query(generationQuery, [generationId, userId]);
+    
+    if (generationResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Generation not found or unauthorized'
+      });
+    }
+
+    const generation = generationResult.rows[0];
+    
+    // Get the prompt metadata which contains brand consistency info
+    const promptSpec = generation.json_spec;
+    
+    if (!promptSpec || !promptSpec.brand_consistency_score) {
+      return res.status(404).json({
+        success: false,
+        message: 'Brand consistency data not available for this generation'
+      });
+    }
+
+    // Get enhanced style profile for detailed breakdown
+    const styleProfile = await intelligentPromptBuilder.getEnhancedStyleProfile(userId);
+    const brandDNA = styleProfile ? intelligentPromptBuilder.extractBrandDNA(styleProfile) : null;
+    
+    if (!brandDNA) {
+      return res.status(404).json({
+        success: false,
+        message: 'No brand DNA found for user'
+      });
+    }
+
+    // Calculate detailed breakdown
+    const thompsonSelection = promptSpec.thompson_selection || {};
+    
+    const breakdown = {
+      aesthetic: {
+        score: thompsonSelection.styleContext === brandDNA.primaryAesthetic ? 1.0 : 
+               brandDNA.secondaryAesthetics.includes(thompsonSelection.styleContext) ? 0.7 : 0.3,
+        matched: thompsonSelection.styleContext,
+        expected: brandDNA.primaryAesthetic
+      },
+      colors: {
+        score: thompsonSelection.colors && thompsonSelection.colors.length > 0 ? 
+               thompsonSelection.colors.filter(c => 
+                 brandDNA.signatureColors.some(sc => sc.name === c.name)
+               ).length / thompsonSelection.colors.length : 0,
+        matched: thompsonSelection.colors?.map(c => c.name) || [],
+        expected: brandDNA.signatureColors.map(c => c.name)
+      },
+      fabric: {
+        score: thompsonSelection.fabric && 
+               brandDNA.signatureFabrics.some(sf => sf.name === thompsonSelection.fabric?.material) ? 1.0 : 0.5,
+        matched: thompsonSelection.fabric?.material,
+        expected: brandDNA.signatureFabrics.map(sf => sf.name)
+      },
+      construction: {
+        score: thompsonSelection.construction && thompsonSelection.construction.length > 0 ? 
+               thompsonSelection.construction.filter(c => 
+                 brandDNA.signatureConstruction.some(sc => 
+                   c.includes(sc.detail) || sc.detail.includes(c)
+                 )
+               ).length / thompsonSelection.construction.length : 0.5,
+        matched: thompsonSelection.construction || [],
+        expected: brandDNA.signatureConstruction.map(sc => sc.detail)
+      },
+      photography: {
+        score: 0.5, // Default score
+        matched: {},
+        expected: {}
+      }
+    };
+
+    // Calculate photography scores if available
+    if (thompsonSelection.pose && brandDNA.preferredShotTypes.length > 0) {
+      const preferredShot = brandDNA.preferredShotTypes[0].type;
+      breakdown.photography.score += thompsonSelection.pose.shot_type === preferredShot ? 0.3 : 0.1;
+      breakdown.photography.matched.shotType = thompsonSelection.pose.shot_type;
+      breakdown.photography.expected.shotType = preferredShot;
+    }
+    
+    if (thompsonSelection.photography && brandDNA.preferredAngles.length > 0) {
+      const preferredAngle = brandDNA.preferredAngles[0].angle;
+      breakdown.photography.score += thompsonSelection.photography.angle === preferredAngle ? 0.2 : 0.0;
+      breakdown.photography.matched.angle = thompsonSelection.photography.angle;
+      breakdown.photography.expected.angle = preferredAngle;
+    }
+    
+    // Normalize photography score
+    breakdown.photography.score = Math.min(1.0, breakdown.photography.score);
+
+    res.json({
+      success: true,
+      data: {
+        generationId,
+        overallScore: promptSpec.brand_consistency_score,
+        breakdown
+      }
+    });
+
+  } catch (error) {
+    logger.error('Brand consistency lookup failed', {
+      error: error.message,
+      stack: error.stack
+    });
+    
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get brand consistency data',
+      code: 'BRAND_CONSISTENCY_ERROR'
+    });
+  }
+}));
+
+// Add this helper function to get ultra detailed descriptors
+async function getUltraDetailedDescriptors(portfolioId) {
+  const query = `
+    SELECT 
+      d.*,
+      pi.url_original as image_url
+    FROM ultra_detailed_descriptors d
+    JOIN portfolio_images pi ON d.image_id = pi.id
+    WHERE pi.portfolio_id = $1
+    ORDER BY d.overall_confidence DESC, d.completeness_percentage DESC
+  `;
+
+  const result = await db.query(query, [portfolioId]);
+  return result.rows;
+}
 
 module.exports = router;

@@ -103,33 +103,14 @@ CREATE TABLE IF NOT EXISTS style_profiles (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Prompts (for generation)
-CREATE TABLE IF NOT EXISTS prompts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    generation_id UUID, -- Will reference generations(id), but created first
-    
-    -- Prompt content
-    text TEXT NOT NULL,
-    json_spec JSONB, -- Structured prompt specification
-    
-    -- Prompt strategy
-    mode VARCHAR(50) DEFAULT 'exploratory', -- exploratory, targeted
-    weights JSONB, -- Attribute weights used
-    
-    -- Performance tracking
-    score FLOAT, -- Success score based on feedback
-    like_count INTEGER DEFAULT 0,
-    dislike_count INTEGER DEFAULT 0,
-    
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+-- Temporarily drop prompts table to avoid foreign key issues
+DROP TABLE IF EXISTS prompts CASCADE;
 
--- Generations (generated images)
-CREATE TABLE IF NOT EXISTS generations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+-- Generations (generated images) - Modified to match existing schema
+CREATE TABLE IF NOT EXISTS generations_new (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(), -- Changed to UUID
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    prompt_id UUID REFERENCES prompts(id) ON DELETE SET NULL,
+    prompt_id UUID, -- Will add foreign key constraint later
     
     -- Image storage
     url TEXT,
@@ -156,14 +137,46 @@ CREATE TABLE IF NOT EXISTS generations (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Add foreign key to prompts after generations table is created
+-- Rename tables to update schema
+DROP TABLE IF EXISTS generations CASCADE;
+ALTER TABLE generations_new RENAME TO generations;
+
+-- Recreate prompts table with proper schema
+CREATE TABLE IF NOT EXISTS prompts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    generation_id UUID, -- Will reference generations(id), but created first
+    
+    -- Prompt content
+    text TEXT NOT NULL,
+    json_spec JSONB, -- Structured prompt specification
+    
+    -- Prompt strategy
+    mode VARCHAR(50) DEFAULT 'exploratory', -- exploratory, targeted
+    weights JSONB, -- Attribute weights used
+    
+    -- Performance tracking
+    score FLOAT, -- Success score based on feedback
+    like_count INTEGER DEFAULT 0,
+    dislike_count INTEGER DEFAULT 0,
+    
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Add foreign key constraints after both tables are created
 ALTER TABLE prompts 
     ADD CONSTRAINT fk_prompts_generation 
     FOREIGN KEY (generation_id) 
     REFERENCES generations(id) 
     ON DELETE SET NULL;
 
--- Feedback (user likes/dislikes)
+ALTER TABLE generations
+    ADD CONSTRAINT fk_generations_prompt
+    FOREIGN KEY (prompt_id)
+    REFERENCES prompts(id)
+    ON DELETE SET NULL;
+
+-- Feedback (user likes/dislikes) - Create with proper schema
 CREATE TABLE IF NOT EXISTS feedback (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,

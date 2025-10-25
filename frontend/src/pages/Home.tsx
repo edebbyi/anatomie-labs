@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { RotateCcw, Heart, X, ChevronLeft, ChevronRight, XIcon } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { RotateCcw, Heart, X, ChevronLeft, ChevronRight, XIcon, Grid3x3, Grid2x2 } from 'lucide-react';
 import authAPI from '../services/authAPI';
 import CommandBar from '../components/CommandBar';
 
@@ -8,6 +8,17 @@ interface GeneratedImage {
   url: string;
   prompt: string;
   timestamp: Date;
+  metadata?: {
+    garmentType?: string;
+    silhouette?: string;
+    colors?: string[];
+    texture?: string;
+    lighting?: string;
+    generatedAt?: string;
+    model?: string;
+    confidence?: number;
+  };
+  tags?: string[];
 }
 
 interface ImageLightboxProps {
@@ -29,22 +40,51 @@ const ImageLightbox: React.FC<ImageLightboxProps> = ({
 }) => {
   const [isFlipped, setIsFlipped] = useState(false);
   const [feedback, setFeedback] = useState<Record<string, 'liked' | 'disliked' | null>>({});
-  const [touchStart, setTouchStart] = useState(0);
-  const [touchEnd, setTouchEnd] = useState(0);
+  const [touchStart, setTouchStart] = useState({ x: 0, y: 0 });
+  const [touchEnd, setTouchEnd] = useState({ x: 0, y: 0 });
+  const lightboxRef = useRef<HTMLDivElement>(null);
 
   const currentImage = images[currentIndex];
 
-  const handleSwipe = () => {
-    if (touchStart - touchEnd > 75) {
-      // Swipe left
+  const handleTouchStart = (e: React.TouchEvent) => {
+    setTouchStart({ x: e.targetTouches[0].clientX, y: e.targetTouches[0].clientY });
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    setTouchEnd({ x: e.targetTouches[0].clientX, y: e.targetTouches[0].clientY });
+  };
+
+  const handleTouchEnd = () => {
+    if (!touchStart.x || !touchEnd.x) return;
+    
+    const distanceX = touchStart.x - touchEnd.x;
+    const distanceY = touchStart.y - touchEnd.y;
+    const isLeftSwipe = distanceX > 50;
+    const isRightSwipe = distanceX < -50;
+    const isUpSwipe = distanceY > 50;
+    const isDownSwipe = distanceY < -50;
+    
+    // Horizontal swipes for next/previous image
+    if (isLeftSwipe) {
       onNext();
-      setIsFlipped(false);
     }
-    if (touchStart - touchEnd < -75) {
-      // Swipe right
+    
+    if (isRightSwipe) {
       onPrevious();
-      setIsFlipped(false);
     }
+    
+    // Vertical swipes for next/previous image
+    if (isUpSwipe || isDownSwipe) {
+      // Up or down swipe navigates to next/previous image
+      if (isUpSwipe) {
+        onNext();
+      } else {
+        onPrevious();
+      }
+    }
+    
+    setTouchStart({ x: 0, y: 0 });
+    setTouchEnd({ x: 0, y: 0 });
   };
 
   const handleFeedback = (liked: boolean) => {
@@ -57,11 +97,9 @@ const ImageLightbox: React.FC<ImageLightboxProps> = ({
       if (e.key === 'Escape') onClose();
       if (e.key === 'ArrowLeft') {
         onPrevious();
-        setIsFlipped(false);
       }
       if (e.key === 'ArrowRight') {
         onNext();
-        setIsFlipped(false);
       }
     };
     window.addEventListener('keydown', handleKeyPress);
@@ -69,7 +107,13 @@ const ImageLightbox: React.FC<ImageLightboxProps> = ({
   }, [onClose, onNext, onPrevious]);
 
   return (
-    <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center">
+    <div 
+      ref={lightboxRef}
+      className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
       {/* Close button */}
       <button
         onClick={onClose}
@@ -81,10 +125,7 @@ const ImageLightbox: React.FC<ImageLightboxProps> = ({
       {/* Navigation arrows */}
       {currentIndex > 0 && (
         <button
-          onClick={() => {
-            onPrevious();
-            setIsFlipped(false);
-          }}
+          onClick={onPrevious}
           className="absolute left-4 z-50 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors"
         >
           <ChevronLeft className="w-8 h-8" />
@@ -92,10 +133,7 @@ const ImageLightbox: React.FC<ImageLightboxProps> = ({
       )}
       {currentIndex < images.length - 1 && (
         <button
-          onClick={() => {
-            onNext();
-            setIsFlipped(false);
-          }}
+          onClick={onNext}
           className="absolute right-4 z-50 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors"
         >
           <ChevronRight className="w-8 h-8" />
@@ -105,76 +143,41 @@ const ImageLightbox: React.FC<ImageLightboxProps> = ({
       {/* Main content area */}
       <div
         className="relative w-full max-w-4xl h-[80vh] mx-4"
-        onClick={() => setIsFlipped(!isFlipped)}
-        onTouchStart={(e) => setTouchStart(e.targetTouches[0].clientX)}
-        onTouchMove={(e) => setTouchEnd(e.targetTouches[0].clientX)}
-        onTouchEnd={handleSwipe}
       >
-        <div
-          className="relative w-full h-full transition-transform duration-500"
-          style={{
-            transformStyle: 'preserve-3d',
-            transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
-          }}
-        >
-          {/* Front - Image */}
-          <div
-            className="absolute inset-0 flex flex-col items-center justify-center"
-            style={{ backfaceVisibility: 'hidden' }}
-          >
-            <img
-              src={currentImage.url}
-              alt={currentImage.prompt}
-              className="max-w-full max-h-full object-contain rounded-lg"
-            />
-            {/* Feedback buttons */}
-            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex gap-4">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleFeedback(false);
-                }}
-                className={`p-4 rounded-full transition-all ${
-                  feedback[currentImage.id] === 'disliked'
-                    ? 'bg-gray-900 text-white scale-110'
-                    : 'bg-white/90 text-gray-700 hover:bg-gray-100'
-                }`}
-              >
-                <X className="w-8 h-8" />
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleFeedback(true);
-                }}
-                className={`p-4 rounded-full transition-all ${
-                  feedback[currentImage.id] === 'liked'
-                    ? 'bg-red-500 text-white scale-110'
-                    : 'bg-white/90 text-gray-700 hover:bg-red-50 hover:text-red-500'
-                }`}
-              >
-                <Heart className={`w-8 h-8 ${feedback[currentImage.id] === 'liked' ? 'fill-current' : ''}`} />
-              </button>
-            </div>
-            <p className="absolute bottom-2 text-white/60 text-sm">Click to see prompt</p>
-          </div>
-
-          {/* Back - Prompt */}
-          <div
-            className="absolute inset-0 bg-gray-900 text-white p-12 flex flex-col justify-center items-center rounded-lg"
-            style={{
-              backfaceVisibility: 'hidden',
-              transform: 'rotateY(180deg)',
-            }}
-          >
-            <div className="max-w-2xl">
-              <h3 className="text-sm font-semibold mb-4 text-gray-400 uppercase tracking-wider">Prompt</h3>
-              <p className="text-2xl leading-relaxed mb-8">{currentImage.prompt}</p>
-              <div className="text-sm text-gray-400">
-                <p>Generated: {new Date(currentImage.timestamp).toLocaleDateString()}</p>
-                <p className="mt-4">Click to flip back</p>
-              </div>
-            </div>
+        <div className="relative w-full h-full">
+          <img
+            src={currentImage.url}
+            alt={currentImage.prompt}
+            className="max-w-full max-h-full object-contain rounded-lg"
+          />
+          {/* Feedback buttons */}
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex gap-4">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleFeedback(false);
+              }}
+              className={`p-4 rounded-full transition-all ${
+                feedback[currentImage.id] === 'disliked'
+                  ? 'bg-gray-900 text-white scale-110'
+                  : 'bg-white/90 text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              <X className="w-8 h-8" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleFeedback(true);
+              }}
+              className={`p-4 rounded-full transition-all ${
+                feedback[currentImage.id] === 'liked'
+                  ? 'bg-red-500 text-white scale-110'
+                  : 'bg-white/90 text-gray-700 hover:bg-red-50 hover:text-red-500'
+              }`}
+            >
+              <Heart className={`w-8 h-8 ${feedback[currentImage.id] === 'liked' ? 'fill-current' : ''}`} />
+            </button>
           </div>
         </div>
       </div>
@@ -192,6 +195,10 @@ const Home: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [gridView, setGridView] = useState<'small' | 'large'>('large');
+  const [touchStart, setTouchStart] = useState({ x: 0, y: 0 });
+  const [touchEnd, setTouchEnd] = useState(0);
+  const gridRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadImages();
@@ -237,7 +244,9 @@ const Home: React.FC = () => {
             id: img.id || `img-${Date.now()}-${Math.random()}`,
             url: img.url,
             prompt: img.promptText || 'AI generated from your style profile',
-            timestamp: timestamp
+            timestamp: timestamp,
+            metadata: img.metadata || {},
+            tags: img.tags || []
           };
         });
         console.log('✅ Loaded images for user', designerId, ':', loadedImages.length);
@@ -262,8 +271,6 @@ const Home: React.FC = () => {
     }
   };
 
-
-
   const handleFeedback = async (imageId: string, liked: boolean) => {
     try {
       const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
@@ -283,13 +290,12 @@ const Home: React.FC = () => {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({
-          feedback: [{
-            image_id: imageId,
-            liked: liked,
-            disliked: !liked
-          }]
-        })
+        body: JSON.stringify([{
+          image_id: imageId,
+          designer_id: userId,
+          selected: liked,
+          rejected: !liked
+        }])
       });
       
       if (response.ok) {
@@ -378,7 +384,6 @@ const Home: React.FC = () => {
     }
   };
 
-
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -387,26 +392,115 @@ const Home: React.FC = () => {
     );
   }
 
+  // Handle touch events for swipe navigation in grid
+  const handleTouchStart = (e: React.TouchEvent) => {
+    setTouchStart({ x: e.targetTouches[0].clientX, y: e.targetTouches[0].clientY });
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    setTouchEnd(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchEnd = () => {
+    if (!touchStart.x || !touchEnd) return;
+    
+    const distance = touchStart.x - touchEnd;
+    const isLeftSwipe = distance > 50;
+    const isRightSwipe = distance < -50;
+    
+    // Only handle horizontal swipes in grid view
+    if (isLeftSwipe || isRightSwipe) {
+      // Prevent default behavior to avoid scrolling
+      if (gridRef.current) {
+        gridRef.current.style.pointerEvents = 'none';
+        setTimeout(() => {
+          if (gridRef.current) {
+            gridRef.current.style.pointerEvents = 'auto';
+          }
+        }, 300);
+      }
+    }
+    
+    setTouchStart({ x: 0, y: 0 });
+    setTouchEnd(0);
+  };
+
   return (
     <div className="min-h-screen bg-white p-8">
       <div className="max-w-7xl mx-auto">
+        {/* Grid View Controls */}
+        <div className="mb-6 flex justify-end">
+          <div className="flex bg-gray-100 rounded-lg p-1">
+            <button
+              onClick={() => setGridView('large')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                gridView === 'large' 
+                  ? 'bg-white shadow-sm text-gray-900' 
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+              title="Large Grid"
+            >
+              <Grid2x2 className="w-5 h-5" />
+            </button>
+            <button
+              onClick={() => setGridView('small')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                gridView === 'small' 
+                  ? 'bg-white shadow-sm text-gray-900' 
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+              title="Small Grid"
+            >
+              <Grid3x3 className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
 
         {/* Images Grid */}
         {images.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+          <div 
+            ref={gridRef}
+            className={
+              gridView === 'small' 
+                ? 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4' 
+                : 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8'
+            }
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+          >
             {images.map((image, index) => (
               <div
                 key={image.id}
                 className="group cursor-pointer"
                 onClick={() => openLightbox(index)}
               >
-                <div className="aspect-square bg-gray-100 rounded-lg overflow-hidden">
+                <div className={
+                  gridView === 'small' 
+                    ? 'aspect-square bg-gray-100 rounded-lg overflow-hidden' 
+                    : 'aspect-square bg-gray-100 rounded-lg overflow-hidden'
+                }>
                   <img
                     src={image.url}
                     alt="AI generated design"
                     className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                   />
                 </div>
+                {/* Display some metadata tags */}
+                {image.metadata && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {image.metadata.garmentType && (
+                      <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded">
+                        {image.metadata.garmentType}
+                      </span>
+                    )}
+                    {image.metadata.colors && image.metadata.colors.length > 0 && (
+                      <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded">
+                        {image.metadata.colors[0]}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>

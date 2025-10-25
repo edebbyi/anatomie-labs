@@ -33,8 +33,8 @@ The `/generate` endpoint is **not** a duplicate of voice commands. It is the pre
 ### 1. INTELLIGENT PROMPT BUILDER
 
 #### 1.1 Enhanced Text Input
-**Current State:** Simple textarea  
-**New State:** Smart prompt field with live interpretation
+**Current State:** Simple textarea with smart interpretation  
+**New State:** Smart prompt field with live interpretation and enhanced AI processing
 
 **Requirements:**
 - Main prompt textarea (expanded, comfortable for detailed descriptions)
@@ -42,6 +42,7 @@ The `/generate` endpoint is **not** a duplicate of voice commands. It is the pre
 - Weight visualization: show which terms get boosted (e.g., "architectural seaming" highlighted with weight indicator)
 - Auto-suggestions from brand DNA vocabulary as user types
 - Smart completion based on style profile
+- Enhanced interpretation that combines user input with brand DNA
 
 **Technical Implementation:**
 ```javascript
@@ -51,21 +52,59 @@ const interpretPrompt = (userInput) => {
   // Display weighted tokens in real-time
   // Show confidence scores for key terms
   // Highlight brand-specific vocabulary matches
+  // Combine with user's style profile for contextual enhancement
 }
 ```
 
-**UI Mock:**
+### 1.2 Enhanced Interpretation API
+
+The `/generate` endpoint now supports enhanced interpretation of user prompts:
+
+**Request:**
+```http
+POST /api/podna/generate
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{
+  "prompt": "elegant black evening gown with silver accents",
+  "mode": "exploratory",
+  "provider": "imagen-4-ultra",
+  "interpret": true
+}
 ```
-┌─ Prompt ─────────────────────────────────────────────┐
-│ black blazer with strong architectural shoulders     │
-│                                                       │
-│ Enhanced interpretation:                             │
-│ • "architectural" → +weight (brand signature)        │
-│ • "strong shoulders" → linked to "power silhouette" │
-│ • Suggested additions: "ultra-feminine fit", "luxury│
-│   fabrication"                                       │
-└──────────────────────────────────────────────────────┘
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Image generated successfully",
+  "data": {
+    "generation": {
+      "id": "gen-xyz123",
+      "url": "https://...",
+      "promptText": "professional fashion photography, elegant black evening gown with silver accents, in the user's signature 'Modern Elegance' style, with structured silhouette, luxurious fabrics, soft lighting from front, 3/4 front angle at eye level, clean studio background, high detail, 8k, sharp focus, studio quality",
+      "promptSpec": { /* detailed prompt metadata */ },
+      "provider": "imagen-4-ultra",
+      "costCents": 8,
+      "createdAt": "2023-01-01T00:00:00Z"
+    }
+  }
+}
 ```
+
+**Parameters:**
+- `prompt` (string, optional): User's design description for interpretation
+- `mode` (string, optional): Generation mode (`exploratory`, `creative`, `precise`)
+- `provider` (string, optional): AI provider to use
+- `interpret` (boolean, optional): Enable enhanced interpretation (default: true)
+- `constraints` (object, optional): Traditional constraints for backward compatibility
+
+When `interpret` is true and a `prompt` is provided, the system:
+1. Combines the user's input with their brand DNA
+2. Enhances the prompt with contextual fashion attributes
+3. Applies style-consistent weights to key elements
+4. Ensures brand alignment while preserving user intent
 
 #### 1.2 Reference Image Upload
 **Purpose:** Visual input for "generate something like this"
@@ -759,7 +798,7 @@ ws.onmessage = (event) => {
 #### 8.3 State Management
 
 **Frontend State:**
-```javascript
+```
 const generateState = {
   prompt: "",
   enhancedPrompt: "",

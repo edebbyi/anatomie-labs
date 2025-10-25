@@ -8,5 +8,13 @@
     "*.log",
     "*.json"
   ],
-  "delay": 2000
+  "delay": 2000,
+  "events": {
+    "restart": "echo 'Nodemon restarting...' && date",
+    "crash": "echo 'Nodemon crashed!' && date"
+  },
+  "env": {
+    "NODE_ENV": "development"
+  },
+  "ext": "js,json"
 }
