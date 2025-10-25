@@ -6,7 +6,7 @@
  */
 
 const db = require('./database');
-const logger = require('../utils/logger');
+const logger = require('../../utils/logger');
 
 class ImprovedTrendAnalysisAgent {
   /**
@@ -46,14 +46,6 @@ class ImprovedTrendAnalysisAgent {
       colorDist
     });
 
-    // Calculate and validate numeric values
-    const avgConfidence = this.calculateAvgConfidence(descriptors);
-    const avgCompleteness = this.calculateAvgCompleteness(descriptors);
-    
-    // Ensure values are properly formatted numbers
-    const validatedAvgConfidence = isNaN(avgConfidence) ? 0 : Math.min(Math.max(parseFloat(avgConfidence.toFixed(3)), 0), 9.999);
-    const validatedAvgCompleteness = isNaN(avgCompleteness) ? 0 : Math.min(Math.max(parseFloat(avgCompleteness.toFixed(2)), 0), 999.99);
-
     // Save to database
     const profile = await this.saveEnhancedProfile(userId, portfolioId, {
       // Existing fields
@@ -69,16 +61,14 @@ class ImprovedTrendAnalysisAgent {
       rich_summary: richSummary,
       
       total_images: descriptors.length,
-      avg_confidence: validatedAvgConfidence,
-      avg_completeness: validatedAvgCompleteness
+      avg_confidence: this.calculateAvgConfidence(descriptors),
+      avg_completeness: this.calculateAvgCompleteness(descriptors)
     });
 
     logger.info('Improved Trend Analysis: Enhanced profile complete', { 
       userId,
       aestheticThemes: aestheticThemes.length,
-      signaturePieces: signaturePieces.length,
-      avg_confidence: validatedAvgConfidence,
-      avg_completeness: validatedAvgCompleteness
+      signaturePieces: signaturePieces.length
     });
 
     return profile;
@@ -465,41 +455,11 @@ class ImprovedTrendAnalysisAgent {
    */
   calculateAvgConfidence(descriptors) {
     if (descriptors.length === 0) return 0;
-    
-    // Debug log to see actual values
-    logger.debug('Calculating avg confidence from descriptors', {
-      descriptorCount: descriptors.length,
-      confidenceValues: descriptors.map(d => ({
-        id: d.id,
-        confidence: d.overall_confidence,
-        type: typeof d.overall_confidence
-      }))
-    });
-    
-    const sum = descriptors.reduce((acc, d) => {
-      const confidence = parseFloat(d.overall_confidence || 0);
-      // Debug log for individual values
-      if (isNaN(confidence) || confidence < 0 || confidence > 10) {
-        logger.warn('Unexpected confidence value', {
-          id: d.id,
-          rawValue: d.overall_confidence,
-          parsedValue: confidence
-        });
-      }
-      return acc + confidence;
-    }, 0);
-    
-    const avg = sum / descriptors.length;
-    logger.debug('Raw average confidence', { sum, count: descriptors.length, avg });
-    
-    // Clamp to safe DB range for confidence scores
-    // Column is defined as DECIMAL(4,3) which allows values from 0.000 to 9.999
-    const clamped = Math.min(Math.max(avg, 0), 9.999);
-    // Ensure we return a properly formatted number
-    const formatted = parseFloat(clamped.toFixed(3));
-    logger.debug('Final confidence value', { clamped, formatted });
-    
-    return isNaN(formatted) ? 0 : formatted;
+    const sum = descriptors.reduce((acc, d) => acc + (d.overall_confidence || 0), 0);
+    let avg = sum / descriptors.length;
+    // Clamp to valid range for DECIMAL(4,3) - values from 0.000 to 9.999
+    avg = Math.min(Math.max(avg, 0), 9.999);
+    return parseFloat(avg.toFixed(3));
   }
 
   /**
@@ -507,41 +467,11 @@ class ImprovedTrendAnalysisAgent {
    */
   calculateAvgCompleteness(descriptors) {
     if (descriptors.length === 0) return 0;
-    
-    // Debug log to see actual values
-    logger.debug('Calculating avg completeness from descriptors', {
-      descriptorCount: descriptors.length,
-      completenessValues: descriptors.map(d => ({
-        id: d.id,
-        completeness: d.completeness_percentage,
-        type: typeof d.completeness_percentage
-      }))
-    });
-    
-    const sum = descriptors.reduce((acc, d) => {
-      const completeness = parseFloat(d.completeness_percentage || 0);
-      // Debug log for individual values
-      if (isNaN(completeness) || completeness < 0 || completeness > 1000) {
-        logger.warn('Unexpected completeness value', {
-          id: d.id,
-          rawValue: d.completeness_percentage,
-          parsedValue: completeness
-        });
-      }
-      return acc + completeness;
-    }, 0);
-    
-    const avg = sum / descriptors.length;
-    logger.debug('Raw average completeness', { sum, count: descriptors.length, avg });
-    
-    // Clamp to safe DB range for percentages
-    // Column is defined as DECIMAL(5,2) which allows values from 0.00 to 999.99
-    const clamped = Math.min(Math.max(avg, 0), 999.99);
-    // Ensure we return a properly formatted number
-    const formatted = parseFloat(clamped.toFixed(2));
-    logger.debug('Final completeness value', { clamped, formatted });
-    
-    return isNaN(formatted) ? 0 : formatted;
+    const sum = descriptors.reduce((acc, d) => acc + (d.completeness_percentage || 0), 0);
+    let avg = sum / descriptors.length;
+    // Clamp to valid range for DECIMAL(5,2) - values from 0.00 to 999.99
+    avg = Math.min(Math.max(avg, 0), 999.99);
+    return parseFloat(avg.toFixed(2));
   }
 
   /**
@@ -563,39 +493,9 @@ class ImprovedTrendAnalysisAgent {
   }
 
   /**
-   * Get user style profile
-   */
-  async getStyleProfile(userId) {
-    const query = `
-      SELECT * FROM style_profiles
-      WHERE user_id = $1
-    `;
-
-    const result = await db.query(query, [userId]);
-    return result.rows[0] || null;
-  }
-
-  /**
-   * Generate style profile (alias for generateEnhancedStyleProfile for compatibility)
-   */
-  async generateStyleProfile(userId, portfolioId) {
-    return this.generateEnhancedStyleProfile(userId, portfolioId);
-  }
-
-  /**
    * Save enhanced profile
    */
   async saveEnhancedProfile(userId, portfolioId, data) {
-    // Debug log to see what data is being passed
-    logger.debug('Saving enhanced profile - raw data', {
-      userId,
-      portfolioId,
-      avg_confidence_raw: data.avg_confidence,
-      avg_completeness_raw: data.avg_completeness,
-      avg_confidence_type: typeof data.avg_confidence,
-      avg_completeness_type: typeof data.avg_completeness
-    });
-    
     // Validate and clamp numeric values to prevent overflow across schema variants
     let validatedAvgConfidence = parseFloat(data.avg_confidence || 0);
     if (isNaN(validatedAvgConfidence)) validatedAvgConfidence = 0;
@@ -625,25 +525,6 @@ class ImprovedTrendAnalysisAgent {
       avg_confidence: validatedAvgConfidence,
       avg_completeness: validatedAvgCompleteness
     };
-    
-    // Debug log to see validated values
-    logger.debug('Saving enhanced profile - validated data', {
-      userId,
-      portfolioId,
-      avg_confidence_validated: validatedData.avg_confidence,
-      avg_completeness_validated: validatedData.avg_completeness,
-      avg_confidence_is_nan: isNaN(validatedData.avg_confidence),
-      avg_completeness_is_nan: isNaN(validatedData.avg_completeness)
-    });
-    
-    // Log numeric values before insert to debug overflow issues
-    logger.info('Saving enhanced profile with numeric values', {
-      userId,
-      portfolioId,
-      total_images: validatedData.total_images,
-      avg_confidence: validatedData.avg_confidence,
-      avg_completeness: validatedData.avg_completeness
-    });
     
     const query = `
       INSERT INTO style_profiles (
@@ -707,8 +588,8 @@ class ImprovedTrendAnalysisAgent {
         JSON.stringify(data.signature_pieces),
         data.rich_summary,
         data.total_images,
-        validatedData.avg_confidence,
-        validatedData.avg_completeness
+        data.avg_confidence,
+        data.avg_completeness
       ]);
     } catch (e) {
       // Defensive retry: if any numeric overflow slips through, set fields to NULL
@@ -736,8 +617,8 @@ class ImprovedTrendAnalysisAgent {
           signature_pieces = EXCLUDED.signature_pieces,
           summary_text = EXCLUDED.summary_text,
           total_images = EXCLUDED.total_images,
-          avg_confidence = EXCLUDED.avg_confidence,
-          avg_completeness = EXCLUDED.avg_completeness,
+          avg_confidence = NULL,
+          avg_completeness = NULL,
           updated_at = CURRENT_TIMESTAMP
         RETURNING *`;
       result = await db.query(fallbackQuery, [
@@ -751,9 +632,7 @@ class ImprovedTrendAnalysisAgent {
         JSON.stringify(data.construction_patterns),
         JSON.stringify(data.signature_pieces),
         data.rich_summary,
-        data.total_images,
-        null, // avg_confidence
-        null  // avg_completeness
+        data.total_images
       ]);
     }
 
