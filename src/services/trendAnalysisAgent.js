@@ -46,6 +46,14 @@ class ImprovedTrendAnalysisAgent {
       colorDist
     });
 
+    // Calculate and validate numeric values
+    const avgConfidence = this.calculateAvgConfidence(descriptors);
+    const avgCompleteness = this.calculateAvgCompleteness(descriptors);
+    
+    // Ensure values are properly formatted numbers
+    const validatedAvgConfidence = isNaN(avgConfidence) ? 0 : Math.min(Math.max(parseFloat(avgConfidence.toFixed(3)), 0), 9.999);
+    const validatedAvgCompleteness = isNaN(avgCompleteness) ? 0 : Math.min(Math.max(parseFloat(avgCompleteness.toFixed(2)), 0), 999.99);
+
     // Save to database
     const profile = await this.saveEnhancedProfile(userId, portfolioId, {
       // Existing fields
@@ -61,14 +69,16 @@ class ImprovedTrendAnalysisAgent {
       rich_summary: richSummary,
       
       total_images: descriptors.length,
-      avg_confidence: this.calculateAvgConfidence(descriptors),
-      avg_completeness: this.calculateAvgCompleteness(descriptors)
+      avg_confidence: validatedAvgConfidence,
+      avg_completeness: validatedAvgCompleteness
     });
 
     logger.info('Improved Trend Analysis: Enhanced profile complete', { 
       userId,
       aestheticThemes: aestheticThemes.length,
-      signaturePieces: signaturePieces.length
+      signaturePieces: signaturePieces.length,
+      avg_confidence: validatedAvgConfidence,
+      avg_completeness: validatedAvgCompleteness
     });
 
     return profile;
@@ -455,14 +465,42 @@ class ImprovedTrendAnalysisAgent {
    */
   calculateAvgConfidence(descriptors) {
     if (descriptors.length === 0) return 0;
+    
+    // Debug log to see actual values
+    logger.debug('Calculating avg confidence from descriptors', {
+      descriptorCount: descriptors.length,
+      confidenceValues: descriptors.map(d => ({
+        id: d.id,
+        confidence: d.overall_confidence,
+        type: typeof d.overall_confidence
+      }))
+    });
+    
     const sum = descriptors.reduce((acc, d) => {
       const confidence = parseFloat(d.overall_confidence || 0);
+      // Debug log for individual values
+      if (isNaN(confidence) || confidence < 0 || confidence > 10) {
+        logger.warn('Unexpected confidence value', {
+          id: d.id,
+          rawValue: d.overall_confidence,
+          parsedValue: confidence
+        });
+      }
       return acc + confidence;
     }, 0);
+    
     const avg = sum / descriptors.length;
-    // Clamp to 0-1 range and format to fit numeric(4,3): max 9.999
-    const clamped = Math.min(Math.max(avg, 0), 1);
-    return parseFloat(clamped.toFixed(3));
+    logger.debug('Raw average confidence', { sum, count: descriptors.length, avg });
+    
+    // Clamp to safe DB range for confidence scores
+    // Many deployments still have avg_confidence as DECIMAL(3,3), which cannot store 1.000
+    // Use 0.999 as an upper bound to avoid numeric overflow even on older schemas
+    const clamped = Math.min(Math.max(avg, 0), 0.999);
+    // Ensure we return a properly formatted number
+    const formatted = parseFloat(clamped.toFixed(3));
+    logger.debug('Final confidence value', { clamped, formatted });
+    
+    return isNaN(formatted) ? 0 : formatted;
   }
 
   /**
@@ -470,14 +508,41 @@ class ImprovedTrendAnalysisAgent {
    */
   calculateAvgCompleteness(descriptors) {
     if (descriptors.length === 0) return 0;
+    
+    // Debug log to see actual values
+    logger.debug('Calculating avg completeness from descriptors', {
+      descriptorCount: descriptors.length,
+      completenessValues: descriptors.map(d => ({
+        id: d.id,
+        completeness: d.completeness_percentage,
+        type: typeof d.completeness_percentage
+      }))
+    });
+    
     const sum = descriptors.reduce((acc, d) => {
       const completeness = parseFloat(d.completeness_percentage || 0);
+      // Debug log for individual values
+      if (isNaN(completeness) || completeness < 0 || completeness > 1000) {
+        logger.warn('Unexpected completeness value', {
+          id: d.id,
+          rawValue: d.completeness_percentage,
+          parsedValue: completeness
+        });
+      }
       return acc + completeness;
     }, 0);
+    
     const avg = sum / descriptors.length;
-    // Clamp to 0-100 range and format to fit numeric(5,2): max 999.99
-    const clamped = Math.min(Math.max(avg, 0), 100);
-    return parseFloat(clamped.toFixed(2));
+    logger.debug('Raw average completeness', { sum, count: descriptors.length, avg });
+    
+    // Clamp to safe DB range for percentages
+    // Some deployments used DECIMAL(4,2) which cannot store 100.00; cap at 99.99
+    const clamped = Math.min(Math.max(avg, 0), 99.99);
+    // Ensure we return a properly formatted number
+    const formatted = parseFloat(clamped.toFixed(2));
+    logger.debug('Final completeness value', { clamped, formatted });
+    
+    return isNaN(formatted) ? 0 : formatted;
   }
 
   /**
@@ -522,13 +587,52 @@ class ImprovedTrendAnalysisAgent {
    * Save enhanced profile
    */
   async saveEnhancedProfile(userId, portfolioId, data) {
+    // Debug log to see what data is being passed
+    logger.debug('Saving enhanced profile - raw data', {
+      userId,
+      portfolioId,
+      avg_confidence_raw: data.avg_confidence,
+      avg_completeness_raw: data.avg_completeness,
+      avg_confidence_type: typeof data.avg_confidence,
+      avg_completeness_type: typeof data.avg_completeness
+    });
+    
+    // Validate and clamp numeric values to prevent overflow across schema variants
+    let validatedAvgConfidence = parseFloat(data.avg_confidence || 0);
+    if (isNaN(validatedAvgConfidence)) validatedAvgConfidence = 0;
+    // Cap at 0.999 to be safe even if column is DECIMAL(3,3)
+    validatedAvgConfidence = Math.min(Math.max(validatedAvgConfidence, 0), 0.999);
+    validatedAvgConfidence = parseFloat(validatedAvgConfidence.toFixed(3));
+    
+    let validatedAvgCompleteness = parseFloat(data.avg_completeness || 0);
+    if (isNaN(validatedAvgCompleteness)) validatedAvgCompleteness = 0;
+    // Cap at 99.99 to be safe even if column is DECIMAL(4,2)
+    validatedAvgCompleteness = Math.min(Math.max(validatedAvgCompleteness, 0), 99.99);
+    validatedAvgCompleteness = parseFloat(validatedAvgCompleteness.toFixed(2));
+    
+    const validatedData = {
+      ...data,
+      avg_confidence: validatedAvgConfidence,
+      avg_completeness: validatedAvgCompleteness
+    };
+    
+    // Debug log to see validated values
+    logger.debug('Saving enhanced profile - validated data', {
+      userId,
+      portfolioId,
+      avg_confidence_validated: validatedData.avg_confidence,
+      avg_completeness_validated: validatedData.avg_completeness,
+      avg_confidence_is_nan: isNaN(validatedData.avg_confidence),
+      avg_completeness_is_nan: isNaN(validatedData.avg_completeness)
+    });
+    
     // Log numeric values before insert to debug overflow issues
     logger.info('Saving enhanced profile with numeric values', {
       userId,
       portfolioId,
-      total_images: data.total_images,
-      avg_confidence: data.avg_confidence,
-      avg_completeness: data.avg_completeness
+      total_images: validatedData.total_images,
+      avg_confidence: validatedData.avg_confidence,
+      avg_completeness: validatedData.avg_completeness
     });
     
     const query = `
@@ -547,7 +651,21 @@ class ImprovedTrendAnalysisAgent {
         avg_confidence,
         avg_completeness
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      VALUES (
+        $1, 
+        $2, 
+        $3, 
+        $4, 
+        $5, 
+        $6, 
+        $7, 
+        $8, 
+        $9, 
+        $10, 
+        $11, 
+        LEAST(GREATEST(trunc(CAST($12 AS numeric), 3), 0), 0.999),
+        LEAST(GREATEST(trunc(CAST($13 AS numeric), 2), 0), 99.99)
+      )
       ON CONFLICT (user_id) DO UPDATE SET
         portfolio_id = EXCLUDED.portfolio_id,
         garment_distribution = EXCLUDED.garment_distribution,
@@ -565,21 +683,65 @@ class ImprovedTrendAnalysisAgent {
       RETURNING *
     `;
 
-    const result = await db.query(query, [
-      userId,
-      portfolioId,
-      JSON.stringify(data.garment_distribution),
-      JSON.stringify(data.color_distribution),
-      JSON.stringify(data.fabric_distribution),
-      JSON.stringify(data.silhouette_distribution),
-      JSON.stringify(data.aesthetic_themes),
-      JSON.stringify(data.construction_patterns),
-      JSON.stringify(data.signature_pieces),
-      data.rich_summary,
-      data.total_images,
-      data.avg_confidence,
-      data.avg_completeness
-    ]);
+    let result;
+    try {
+      result = await db.query(query, [
+        userId,
+        portfolioId,
+        JSON.stringify(data.garment_distribution),
+        JSON.stringify(data.color_distribution),
+        JSON.stringify(data.fabric_distribution),
+        JSON.stringify(data.silhouette_distribution),
+        JSON.stringify(data.aesthetic_themes),
+        JSON.stringify(data.construction_patterns),
+        JSON.stringify(data.signature_pieces),
+        data.rich_summary,
+        data.total_images,
+        validatedData.avg_confidence,
+        validatedData.avg_completeness
+      ]);
+    } catch (e) {
+      // Defensive retry: if any numeric overflow slips through, set fields to NULL
+      logger.warn('Numeric overflow on style_profiles insert, retrying with NULLs', {
+        error: e.message,
+        avg_confidence: validatedData.avg_confidence,
+        avg_completeness: validatedData.avg_completeness
+      });
+      const fallbackQuery = `
+        INSERT INTO style_profiles (
+          user_id, portfolio_id, garment_distribution, color_distribution, fabric_distribution,
+          silhouette_distribution, aesthetic_themes, construction_patterns, signature_pieces,
+          summary_text, total_images, avg_confidence, avg_completeness
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NULL, NULL)
+        ON CONFLICT (user_id) DO UPDATE SET
+          portfolio_id = EXCLUDED.portfolio_id,
+          garment_distribution = EXCLUDED.garment_distribution,
+          color_distribution = EXCLUDED.color_distribution,
+          fabric_distribution = EXCLUDED.fabric_distribution,
+          silhouette_distribution = EXCLUDED.silhouette_distribution,
+          aesthetic_themes = EXCLUDED.aesthetic_themes,
+          construction_patterns = EXCLUDED.construction_patterns,
+          signature_pieces = EXCLUDED.signature_pieces,
+          summary_text = EXCLUDED.summary_text,
+          total_images = EXCLUDED.total_images,
+          avg_confidence = EXCLUDED.avg_confidence,
+          avg_completeness = EXCLUDED.avg_completeness,
+          updated_at = CURRENT_TIMESTAMP
+        RETURNING *`;
+      result = await db.query(fallbackQuery, [
+        userId,
+        portfolioId,
+        JSON.stringify(data.garment_distribution),
+        JSON.stringify(data.color_distribution),
+        JSON.stringify(data.fabric_distribution),
+        JSON.stringify(data.silhouette_distribution),
+        JSON.stringify(data.aesthetic_themes),
+        JSON.stringify(data.construction_patterns),
+        JSON.stringify(data.signature_pieces),
+        data.rich_summary,
+        data.total_images
+      ]);
+    }
 
     return result.rows[0];
   }

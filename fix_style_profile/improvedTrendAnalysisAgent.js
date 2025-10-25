@@ -456,7 +456,10 @@ class ImprovedTrendAnalysisAgent {
   calculateAvgConfidence(descriptors) {
     if (descriptors.length === 0) return 0;
     const sum = descriptors.reduce((acc, d) => acc + (d.overall_confidence || 0), 0);
-    return parseFloat((sum / descriptors.length).toFixed(3));
+    let avg = sum / descriptors.length;
+    // Clamp to valid range for DECIMAL(4,3) - values from 0.000 to 9.999
+    avg = Math.min(Math.max(avg, 0), 9.999);
+    return parseFloat(avg.toFixed(3));
   }
 
   /**
@@ -465,7 +468,10 @@ class ImprovedTrendAnalysisAgent {
   calculateAvgCompleteness(descriptors) {
     if (descriptors.length === 0) return 0;
     const sum = descriptors.reduce((acc, d) => acc + (d.completeness_percentage || 0), 0);
-    return parseFloat((sum / descriptors.length).toFixed(1));
+    let avg = sum / descriptors.length;
+    // Clamp to valid range for DECIMAL(5,2) - values from 0.00 to 999.99
+    avg = Math.min(Math.max(avg, 0), 999.99);
+    return parseFloat(avg.toFixed(2));
   }
 
   /**

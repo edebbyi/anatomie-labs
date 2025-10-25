@@ -2,7 +2,7 @@ const { Client } = require('pg');
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
-async function testNumericFix() {
+async function testFinalNumericFix() {
   const client = new Client({
     host: process.env.DB_HOST || 'localhost',
     port: process.env.DB_PORT || 5432,
@@ -15,9 +15,44 @@ async function testNumericFix() {
     await client.connect();
     console.log('✅ Connected to database successfully');
 
-    // Test inserting values that might cause overflow
+    // Create a test user first
     const testUserId = uuidv4();
+    
+    console.log('\n🔧 Creating test user...');
+    
+    const createUserQuery = `
+      INSERT INTO users (id, email, password_hash, name)
+      VALUES ($1, $2, $3, $4)
+    `;
+    
+    await client.query(createUserQuery, [
+      testUserId,
+      `test-${testUserId}@example.com`,
+      'test-password-hash',
+      'Test User'
+    ]);
+    
+    console.log('✅ Test user created successfully');
+    
+    // Create a test portfolio
     const testPortfolioId = uuidv4();
+    
+    console.log('\n🔧 Creating test portfolio...');
+    
+    const createPortfolioQuery = `
+      INSERT INTO portfolios (id, user_id, title, zip_filename, image_count)
+      VALUES ($1, $2, $3, $4, $5)
+    `;
+    
+    await client.query(createPortfolioQuery, [
+      testPortfolioId,
+      testUserId,
+      'Test Portfolio',
+      'test-portfolio.zip',
+      50
+    ]);
+    
+    console.log('✅ Test portfolio created successfully');
     
     console.log('\n🧪 Testing numeric value insertion...');
     
@@ -89,6 +124,8 @@ async function testNumericFix() {
     
     // Clean up test data
     await client.query('DELETE FROM style_profiles WHERE user_id = $1', [testUserId]);
+    await client.query('DELETE FROM portfolios WHERE id = $1', [testPortfolioId]);
+    await client.query('DELETE FROM users WHERE id = $1', [testUserId]);
     console.log(`\n🧹 Cleaned up test data`);
 
   } catch (error) {
@@ -98,4 +135,4 @@ async function testNumericFix() {
   }
 }
 
-testNumericFix();
+testFinalNumericFix();
