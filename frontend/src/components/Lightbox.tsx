@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Heart, Download, Info } from 'lucide-react';
-import { useKeyboard, useLockBodyScroll } from '../hooks';
 
 interface GeneratedImage {
   id: string;
@@ -35,377 +34,471 @@ const Lightbox: React.FC<LightboxProps> = ({
 }) => {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [isFlipped, setIsFlipped] = useState(false);
-  const [isClosing, setIsClosing] = useState(false);
-  const [isExiting, setIsExiting] = useState(false);
-  const [exitDirection, setExitDirection] = useState<'up' | 'down' | 'left' | 'right' | null>(null);
-
-  // Touch/drag state
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [animationDirection, setAnimationDirection] = useState<'up' | 'down' | 'left' | 'right' | null>(null);
+  
+  // Drag state
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   
-  const wheelTimeRef = useRef(0);
-  const cardRef = useRef<HTMLDivElement>(null);
-
-  useLockBodyScroll(true);
+  const wheelTimeoutRef = useRef<number>(0);
 
   const currentImage = images[currentIndex];
 
-  // Keyboard handlers
-  const keyboardHandlers: Record<string, () => void> = {
-    ArrowUp: () => goToPrevious(),
-    ArrowDown: () => goToNext(),
-    ArrowLeft: showFavorite ? () => handleDismiss() : () => {},
-    ArrowRight: showFavorite ? () => handleLike() : () => {},
-    Escape: () => startClose(),
-    d: () => handleDownload(),
-    i: () => setIsFlipped(!isFlipped),
+  // Lock body scroll and ensure full coverage
+  useEffect(() => {
+    const originalOverflow = document.body.style.overflow;
+    const originalHeight = document.body.style.height;
+    
+    document.body.style.overflow = 'hidden';
+    document.body.style.height = '100vh';
+    
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      document.body.style.height = originalHeight;
+    };
+  }, []);
+
+  // Reset flip when changing cards
+  useEffect(() => {
+    setIsFlipped(false);
+  }, [currentIndex]);
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (isAnimating) return;
+      
+      if (e.key === 'Escape') {
+        onClose();
+      } else if (e.key === 'ArrowUp' && currentIndex > 0) {
+        goToPrevious();
+      } else if (e.key === 'ArrowDown' && currentIndex < images.length - 1) {
+        goToNext();
+      } else if (e.key === 'i' || e.key === 'I') {
+        setIsFlipped(!isFlipped);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentIndex, isFlipped, images.length, onClose, isAnimating]);
+
+  const goToNext = () => {
+    if (isAnimating || currentIndex >= images.length - 1) return;
+    setIsAnimating(true);
+    setAnimationDirection('up');
+    setTimeout(() => {
+      setCurrentIndex(currentIndex + 1);
+      setIsAnimating(false);
+      setAnimationDirection(null);
+    }, 350);
   };
 
-  if (showFavorite) {
-    keyboardHandlers.l = () => handleLike();
-    keyboardHandlers.x = () => handleDismiss();
-  }
+  const goToPrevious = () => {
+    if (isAnimating || currentIndex <= 0) return;
+    setIsAnimating(true);
+    setAnimationDirection('down');
+    setTimeout(() => {
+      setCurrentIndex(currentIndex - 1);
+      setIsAnimating(false);
+      setAnimationDirection(null);
+    }, 350);
+  };
 
-  useKeyboard(keyboardHandlers);
+  const handleLike = () => {
+    if (isAnimating) return;
+    setIsAnimating(true);
+    setAnimationDirection('right');
+    if (onLike) onLike(currentImage.id);
+    setTimeout(() => {
+      if (currentIndex < images.length - 1) {
+        setCurrentIndex(currentIndex + 1);
+      } else {
+        onClose();
+      }
+      setIsAnimating(false);
+      setAnimationDirection(null);
+    }, 350);
+  };
 
+  const handleDismiss = () => {
+    if (isAnimating) return;
+    setIsAnimating(true);
+    setAnimationDirection('left');
+    if (onDismiss) onDismiss(currentImage.id);
+    setTimeout(() => {
+      if (currentIndex < images.length - 1) {
+        setCurrentIndex(currentIndex + 1);
+      } else {
+        onClose();
+      }
+      setIsAnimating(false);
+      setAnimationDirection(null);
+    }, 350);
+  };
+
+  // Mouse wheel navigation
   const handleWheel = (e: React.WheelEvent) => {
-    if (isExiting || isFlipped) return;
+    if (isAnimating || isFlipped) return;
     
     const now = Date.now();
-    if (now - wheelTimeRef.current < 450) return;
-    wheelTimeRef.current = now;
+    if (now - wheelTimeoutRef.current < 500) return;
+    wheelTimeoutRef.current = now;
 
-    if (e.deltaY < 0 && currentIndex > 0) {
-      animateNavigation('up', () => goToPrevious());
-    } else if (e.deltaY > 0 && currentIndex < images.length - 1) {
-      animateNavigation('down', () => goToNext());
+    if (e.deltaY > 0) {
+      goToNext();
+    } else if (e.deltaY < 0) {
+      goToPrevious();
     }
   };
 
-  const animateNavigation = (direction: 'up' | 'down' | 'left' | 'right', callback: () => void) => {
-    setIsExiting(true);
-    setExitDirection(direction);
-    setTimeout(() => {
-      callback();
-      setIsExiting(false);
-      setExitDirection(null);
-    }, 300);
-  };
-
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (isFlipped || isExiting) return;
-    const touch = e.targetTouches[0];
-    setDragStart({ x: touch.clientX, y: touch.clientY });
+  // Drag handlers
+  const handleDragStart = (e: React.TouchEvent | React.MouseEvent) => {
+    if (isAnimating || isFlipped) return;
+    
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    
     setIsDragging(true);
+    setDragStart({ x: clientX, y: clientY });
+    setDragOffset({ x: 0, y: 0 });
   };
 
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (!isDragging || isFlipped || isExiting) return;
-
-    const touch = e.targetTouches[0];
-    const deltaX = touch.clientX - dragStart.x;
-    const deltaY = touch.clientY - dragStart.y;
-
-    setDragOffset({ x: deltaX, y: deltaY });
+  const handleDragMove = (e: React.TouchEvent | React.MouseEvent) => {
+    if (!isDragging || isAnimating || isFlipped) return;
+    
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    
+    setDragOffset({
+      x: clientX - dragStart.x,
+      y: clientY - dragStart.y
+    });
   };
 
-  const handleTouchEnd = () => {
-    if (!isDragging || isFlipped || isExiting) return;
-
+  const handleDragEnd = () => {
+    if (!isDragging || isAnimating) return;
+    
     const { x: deltaX, y: deltaY } = dragOffset;
     const absDeltaX = Math.abs(deltaX);
     const absDeltaY = Math.abs(deltaY);
+    const threshold = 80;
 
-    // Determine if horizontal or vertical swipe
-    if (absDeltaX > absDeltaY && absDeltaX > 120 && showFavorite) {
-      // Horizontal swipe for like/dismiss
+    if (absDeltaX > absDeltaY && absDeltaX > threshold && showFavorite) {
       if (deltaX > 0) {
         handleLike();
       } else {
         handleDismiss();
       }
-    } else if (absDeltaY > absDeltaX && absDeltaY > 100) {
-      // Vertical swipe for navigation
-      if (deltaY < 0 && currentIndex < images.length - 1) {
-        animateNavigation('down', () => goToNext());
-      } else if (deltaY > 0 && currentIndex > 0) {
-        animateNavigation('up', () => goToPrevious());
+    } else if (absDeltaY > absDeltaX && absDeltaY > threshold) {
+      if (deltaY > 0) {
+        goToPrevious();
+      } else {
+        goToNext();
       }
     }
-
-    // Reset drag state
+    
     setIsDragging(false);
     setDragOffset({ x: 0, y: 0 });
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (isFlipped || isExiting || !showFavorite) return;
-    setDragStart({ x: e.clientX, y: e.clientY });
-    setIsDragging(true);
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging || isFlipped || isExiting) return;
-    const deltaX = e.clientX - dragStart.x;
-    const deltaY = e.clientY - dragStart.y;
-    setDragOffset({ x: deltaX, y: deltaY });
-  };
-
-  const handleMouseUp = () => {
-    if (!isDragging) return;
-    handleTouchEnd();
-  };
-
-  const handleLike = () => {
-    if (isExiting) return;
-    if (onLike) onLike(currentImage.id);
+  const handleCardClick = (e: React.MouseEvent) => {
+    if (isDragging || isAnimating) return;
+    if (Math.abs(dragOffset.x) > 5 || Math.abs(dragOffset.y) > 5) return;
     
-    animateNavigation('right', () => {
-      if (currentIndex < images.length - 1) {
-        goToNext();
-      } else {
-        startClose();
-      }
-    });
+    e.stopPropagation();
+    setIsFlipped(!isFlipped);
   };
 
-  const handleDismiss = () => {
-    if (isExiting) return;
-    if (onDismiss) onDismiss(currentImage.id);
-    
-    animateNavigation('left', () => {
-      if (currentIndex < images.length - 1) {
-        goToNext();
-      } else {
-        startClose();
-      }
-    });
-  };
-
-  const goToNext = () => {
-    setCurrentIndex((prev) => Math.min(prev + 1, images.length - 1));
-    setIsFlipped(false);
-  };
-
-  const goToPrevious = () => {
-    setCurrentIndex((prev) => Math.max(prev - 1, 0));
-    setIsFlipped(false);
-  };
-
-  const startClose = () => {
-    setIsClosing(true);
-    setTimeout(() => {
-      onClose();
-    }, 250);
-  };
-
-  const handleDownload = () => {
-    const link = document.createElement('a');
-    link.href = currentImage.url;
-    link.download = `podna-design-${currentImage.id}.png`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
-
-  // Calculate card transform based on drag and exit state
+  // Calculate transforms
   const getCardTransform = () => {
-    if (isExiting && exitDirection) {
+    if (animationDirection) {
       const distance = 1200;
-      switch (exitDirection) {
-        case 'up': return `translateY(${distance}px) scale(0.7)`;
-        case 'down': return `translateY(-${distance}px) scale(0.7)`;
-        case 'left': return `translateX(-${distance}px) rotate(-20deg) scale(0.7)`;
-        case 'right': return `translateX(${distance}px) rotate(20deg) scale(0.7)`;
+      switch (animationDirection) {
+        case 'up': return `translateY(-${distance}px) scale(0.85)`;
+        case 'down': return `translateY(${distance}px) scale(0.85)`;
+        case 'left': return `translateX(-${distance}px) rotate(-20deg) scale(0.8)`;
+        case 'right': return `translateX(${distance}px) rotate(20deg) scale(0.8)`;
       }
     }
 
     if (isDragging) {
-      const rotation = (dragOffset.x / window.innerWidth) * 20;
-      return `translate(${dragOffset.x}px, ${dragOffset.y}px) rotate(${rotation}deg)`;
+      const { x, y } = dragOffset;
+      const rotation = (x / window.innerWidth) * 15;
+      return `translate(${x}px, ${y}px) rotate(${rotation}deg)`;
     }
 
-    return 'translate(0, 0) scale(1)';
+    return 'translate(0, 0)';
   };
 
   const getCardOpacity = () => {
-    if (isClosing) return 0;
-    if (isExiting) return 0;
+    if (animationDirection) return 0;
     if (isDragging) {
-      const maxDistance = 250;
       const distance = Math.sqrt(dragOffset.x ** 2 + dragOffset.y ** 2);
-      return Math.max(0.6, 1 - distance / maxDistance * 0.4);
+      return Math.max(0.6, 1 - distance / 400);
     }
     return 1;
   };
 
+  const getDragIndicator = () => {
+    if (!isDragging || !showFavorite) return null;
+    
+    const { x, y } = dragOffset;
+    const absDeltaX = Math.abs(x);
+    const absDeltaY = Math.abs(y);
+    
+    if (absDeltaX > absDeltaY && absDeltaX > 40) {
+      return x > 0 ? 'like' : 'dismiss';
+    }
+    return null;
+  };
+
+  const dragIndicator = getDragIndicator();
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  };
+
   return (
     <div
-      className="fixed inset-0 z-[9999]"
       style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
         width: '100vw',
         height: '100vh',
-        backgroundColor: 'rgba(0, 0, 0, 0.92)',
-        opacity: isClosing ? 0 : 1,
-        transition: 'opacity 0.25s ease-out',
+        backgroundColor: '#000000',
+        zIndex: 99999,
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        flexDirection: 'column',
       }}
       onWheel={handleWheel}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) startClose();
-      }}
     >
-      {/* Close Button */}
-      <button
-        onClick={startClose}
-        className="absolute top-6 right-6 z-50 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors"
-        aria-label="Close lightbox"
-      >
-        <X className="w-6 h-6" />
-      </button>
-
-      {/* Image Counter */}
-      <div className="absolute top-6 left-6 text-white text-base font-medium z-50">
-        {currentIndex + 1} / {images.length}
-      </div>
-
-      {/* Instructions */}
-      <div className="absolute top-6 left-1/2 -translate-x-1/2 text-white/70 text-sm text-center select-none z-50">
-        <p>
-          {showFavorite ? 'Swipe ↔ to like/dismiss | ' : ''}Swipe ↕ to navigate | Click to flip
-        </p>
-      </div>
-
-      {/* Card */}
-      <div
-        ref={cardRef}
-        className="relative cursor-pointer"
+      {/* Top Bar */}
+      <div 
         style={{
-          width: 'min(90vw, 650px)',
-          height: 'min(85vh, 800px)',
-          transform: getCardTransform(),
-          opacity: getCardOpacity(),
-          transition: isDragging ? 'none' : 'transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease-out',
-          perspective: '1200px',
-        }}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (!isDragging && Math.abs(dragOffset.x) < 5 && Math.abs(dragOffset.y) < 5) {
-            setIsFlipped(!isFlipped);
-          }
-        }}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={() => {
-          if (isDragging) handleMouseUp();
+          height: '60px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 24px',
+          flexShrink: 0,
         }}
       >
+        <div style={{ color: 'white', fontSize: '14px', fontWeight: '500' }}>
+          {currentIndex + 1} / {images.length}
+        </div>
+        <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px' }}>
+          Scroll or swipe to navigate • Click to flip
+        </div>
+        <button
+          onClick={onClose}
+          style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '50%',
+            backgroundColor: 'rgba(255,255,255,0.1)',
+            border: 'none',
+            color: 'white',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'background-color 0.2s',
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}
+        >
+          <X size={20} />
+        </button>
+      </div>
+
+      {/* Main Content Area */}
+      <div 
+        style={{
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          position: 'relative',
+          overflow: 'hidden',
+        }}
+      >
+        {/* Card - OPTIMIZED FOR PORTRAIT FASHION IMAGES */}
         <div
           style={{
-            transformStyle: 'preserve-3d',
-            transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
-            transition: 'transform 0.6s ease',
-            width: '100%',
-            height: '100%',
+            width: 'min(92vw, 650px)',  // Narrower for portrait images
+            height: 'min(88vh, 1000px)', // Taller for portrait images
+            maxWidth: '650px',  // Max width for portrait aspect ratio
+            maxHeight: '88vh',
+            transform: getCardTransform(),
+            opacity: getCardOpacity(),
+            transition: isDragging ? 'none' : 'all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1)',
+            cursor: isDragging ? 'grabbing' : 'grab',
+            position: 'relative',
           }}
+          onMouseDown={handleDragStart}
+          onMouseMove={handleDragMove}
+          onMouseUp={handleDragEnd}
+          onMouseLeave={handleDragEnd}
+          onTouchStart={handleDragStart}
+          onTouchMove={handleDragMove}
+          onTouchEnd={handleDragEnd}
         >
-          {/* Front: Image */}
-          <div
-            style={{ 
-              backfaceVisibility: 'hidden',
-              position: 'absolute',
-              inset: 0,
-            }}
-            className="bg-white rounded-2xl shadow-2xl overflow-hidden flex items-center justify-center"
-          >
-            <img
-              src={currentImage.url}
-              alt={currentImage.prompt}
-              className="max-w-full max-h-full object-contain"
-              draggable={false}
-            />
-            
-            {/* Info Icon */}
-            <div className="absolute top-5 right-5 bg-black/20 hover:bg-black/30 rounded-full p-2.5 transition-colors">
-              <Info className="w-5 h-5 text-white" />
+          {/* Drag Indicator */}
+          {dragIndicator && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: '20px',
+                backgroundColor: dragIndicator === 'like'
+                  ? 'rgba(255, 255, 255, 0.08)'
+                  : 'rgba(0, 0, 0, 0.3)',
+                pointerEvents: 'none',
+                zIndex: 10,
+              }}
+            >
+              {dragIndicator === 'like' ? (
+                <Heart size={96} color="white" style={{ opacity: 0.6 }} strokeWidth={1.5} />
+              ) : (
+                <X size={96} color="white" style={{ opacity: 0.6 }} strokeWidth={2} />
+              )}
             </div>
-          </div>
+          )}
 
-          {/* Back: Details */}
+          {/* Card Flipper */}
           <div
             style={{
-              backfaceVisibility: 'hidden',
-              transform: 'rotateY(180deg)',
-              position: 'absolute',
-              inset: 0,
+              width: '100%',
+              height: '100%',
+              transformStyle: 'preserve-3d',
+              transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
+              transition: 'transform 0.6s',
+              position: 'relative',
             }}
-            className="bg-gradient-to-br from-gray-900 to-black rounded-2xl shadow-2xl p-8 overflow-y-auto"
+            onClick={handleCardClick}
           >
-            <div className="text-white">
-              <h3 className="text-xl font-semibold mb-4">Prompt</h3>
-              <p className="text-gray-300 leading-relaxed mb-8">
+            {/* Front - Image */}
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                backfaceVisibility: 'hidden',
+                backgroundColor: 'white',
+                borderRadius: '20px',
+                overflow: 'hidden',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 25px 70px rgba(0,0,0,0.4)',
+              }}
+            >
+              <img
+                src={currentImage.url}
+                alt="Design"
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'contain',  // This ensures the image fills properly
+                  display: 'block',
+                }}
+                draggable={false}
+              />
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: '20px',
+                  right: '20px',
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  backgroundColor: 'rgba(0,0,0,0.2)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'background-color 0.2s',
+                }}
+              >
+                <Info size={20} color="white" />
+              </div>
+            </div>
+
+            {/* Back - Details */}
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                backfaceVisibility: 'hidden',
+                transform: 'rotateY(180deg)',
+                background: 'linear-gradient(135deg, #1f2937 0%, #111827 100%)',
+                borderRadius: '20px',
+                padding: '32px',
+                overflowY: 'auto',
+                color: 'white',
+              }}
+            >
+              <h3 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '16px' }}>Prompt</h3>
+              <p style={{ color: '#d1d5db', fontSize: '14px', lineHeight: '1.6', marginBottom: '32px' }}>
                 {currentImage.prompt}
               </p>
 
-              <h4 className="text-lg font-semibold text-gray-400 mb-4">Details</h4>
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Generated:</span>
-                  <span className="text-gray-300">{formatDate(currentImage.timestamp)}</span>
+              <h4 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px', color: '#9ca3af' }}>Details</h4>
+              <div style={{ fontSize: '13px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '12px' }}>
+                  <span style={{ color: '#6b7280' }}>Generated</span>
+                  <span style={{ color: '#d1d5db' }}>{formatDate(currentImage.timestamp)}</span>
                 </div>
 
                 {currentImage.metadata?.garmentType && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Garment:</span>
-                    <span className="text-gray-300 capitalize">
-                      {currentImage.metadata.garmentType}
-                    </span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '12px' }}>
+                    <span style={{ color: '#6b7280' }}>Garment</span>
+                    <span style={{ color: '#d1d5db', textTransform: 'capitalize' }}>{currentImage.metadata.garmentType}</span>
                   </div>
                 )}
 
                 {currentImage.metadata?.silhouette && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Silhouette:</span>
-                    <span className="text-gray-300 capitalize">
-                      {currentImage.metadata.silhouette}
-                    </span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '12px' }}>
+                    <span style={{ color: '#6b7280' }}>Silhouette</span>
+                    <span style={{ color: '#d1d5db', textTransform: 'capitalize' }}>{currentImage.metadata.silhouette}</span>
                   </div>
                 )}
 
                 {currentImage.metadata?.fabric && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Fabric:</span>
-                    <span className="text-gray-300 capitalize">
-                      {currentImage.metadata.fabric}
-                    </span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '12px' }}>
+                    <span style={{ color: '#6b7280' }}>Fabric</span>
+                    <span style={{ color: '#d1d5db', textTransform: 'capitalize' }}>{currentImage.metadata.fabric}</span>
                   </div>
                 )}
 
                 {currentImage.metadata?.colors && currentImage.metadata.colors.length > 0 && (
-                  <div>
-                    <span className="text-gray-500 block mb-2">Colors:</span>
-                    <div className="flex flex-wrap gap-2">
+                  <div style={{ paddingBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '12px' }}>
+                    <span style={{ color: '#6b7280', display: 'block', marginBottom: '8px' }}>Colors</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                       {currentImage.metadata.colors.map((color, idx) => (
                         <span
                           key={idx}
-                          className="px-3 py-1 bg-white/10 text-gray-300 rounded-full text-xs capitalize"
+                          style={{
+                            padding: '6px 12px',
+                            backgroundColor: 'rgba(255,255,255,0.1)',
+                            color: '#d1d5db',
+                            borderRadius: '16px',
+                            fontSize: '12px',
+                            textTransform: 'capitalize',
+                          }}
                         >
                           {color}
                         </span>
@@ -416,12 +509,19 @@ const Lightbox: React.FC<LightboxProps> = ({
 
                 {currentImage.metadata?.styleTags && currentImage.metadata.styleTags.length > 0 && (
                   <div>
-                    <span className="text-gray-500 block mb-2">Style Tags:</span>
-                    <div className="flex flex-wrap gap-2">
+                    <span style={{ color: '#6b7280', display: 'block', marginBottom: '8px' }}>Style Tags</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                       {currentImage.metadata.styleTags.map((tag, idx) => (
                         <span
                           key={idx}
-                          className="px-3 py-1 bg-white/10 text-gray-300 rounded-full text-xs capitalize"
+                          style={{
+                            padding: '6px 12px',
+                            backgroundColor: 'rgba(255,255,255,0.1)',
+                            color: '#d1d5db',
+                            borderRadius: '16px',
+                            fontSize: '12px',
+                            textTransform: 'capitalize',
+                          }}
                         >
                           {tag}
                         </span>
@@ -431,50 +531,106 @@ const Lightbox: React.FC<LightboxProps> = ({
                 )}
               </div>
 
-              <div className="mt-8 pt-4 border-t border-white/10 text-center">
-                <p className="text-xs text-gray-500">Click to flip back • Press I</p>
+              <div style={{ marginTop: '32px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.1)', textAlign: 'center' }}>
+                <p style={{ fontSize: '11px', color: '#6b7280' }}>Click to flip back</p>
               </div>
             </div>
           </div>
         </div>
-
-        {/* Like/Dismiss Buttons */}
-        {showFavorite && !isFlipped && (
-          <div 
-            className="absolute -bottom-20 left-1/2 -translate-x-1/2 flex items-center gap-6 z-10"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              onClick={handleDismiss}
-              className="w-16 h-16 bg-white rounded-full shadow-2xl flex items-center justify-center hover:scale-110 active:scale-95 transition-transform"
-              aria-label="Dismiss"
-            >
-              <X className="w-8 h-8 text-red-500" strokeWidth={2.5} />
-            </button>
-            
-            <button
-              onClick={handleLike}
-              className="w-16 h-16 bg-white rounded-full shadow-2xl flex items-center justify-center hover:scale-110 active:scale-95 transition-transform"
-              aria-label="Like"
-            >
-              <Heart className="w-8 h-8 text-pink-500" strokeWidth={2.5} />
-            </button>
-          </div>
-        )}
       </div>
 
-      {/* Download Button */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          handleDownload();
+      {/* Bottom Bar */}
+      <div
+        style={{
+          height: '100px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
         }}
-        className="absolute bottom-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors z-50"
-        aria-label="Download image"
-        title="Download (D key)"
       >
-        <Download className="w-6 h-6" />
-      </button>
+        {showFavorite && !isFlipped ? (
+          <div style={{ display: 'flex', gap: '24px' }}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDismiss();
+              }}
+              disabled={isAnimating}
+              style={{
+                width: '56px',
+                height: '56px',
+                borderRadius: '50%',
+                backgroundColor: 'white',
+                border: 'none',
+                cursor: isAnimating ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 10px 40px rgba(0,0,0,0.3)',
+                transition: 'transform 0.2s',
+                opacity: isAnimating ? 0.5 : 1,
+              }}
+              onMouseEnter={(e) => !isAnimating && (e.currentTarget.style.transform = 'scale(1.1)')}
+              onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+            >
+              <X size={28} color="#111" strokeWidth={2.5} />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleLike();
+              }}
+              disabled={isAnimating}
+              style={{
+                width: '56px',
+                height: '56px',
+                borderRadius: '50%',
+                backgroundColor: 'white',
+                border: 'none',
+                cursor: isAnimating ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 10px 40px rgba(0,0,0,0.3)',
+                transition: 'transform 0.2s',
+                opacity: isAnimating ? 0.5 : 1,
+              }}
+              onMouseEnter={(e) => !isAnimating && (e.currentTarget.style.transform = 'scale(1.1)')}
+              onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+            >
+              <Heart size={28} color="#111" strokeWidth={2.5} />
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              const link = document.createElement('a');
+              link.href = currentImage.url;
+              link.download = `podna-${currentImage.id}.png`;
+              link.click();
+            }}
+            style={{
+              width: '40px',
+              height: '40px',
+              borderRadius: '50%',
+              backgroundColor: 'rgba(255,255,255,0.1)',
+              border: 'none',
+              color: 'white',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'background-color 0.2s',
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}
+          >
+            <Download size={20} />
+          </button>
+        )}
+      </div>
     </div>
   );
 };

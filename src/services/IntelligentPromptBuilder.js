@@ -1,6 +1,6 @@
 /**
  * Intelligent Prompt Builder - FIXED VERSION
- * 
+ *
  * FIXES:
  * 1. Correct prompt order: Style → Garment → Color → Model/Pose → Accessories → Lighting → Camera
  * 2. Learns shot types from portfolio analysis
@@ -16,20 +16,20 @@ class IntelligentPromptBuilder {
     // Thompson Sampling defaults
     this.DEFAULT_ALPHA = 2;
     this.DEFAULT_BETA = 2;
-    
+
     // Creativity threshold
     this.CREATIVITY_THRESHOLD = 0.5;
-    
+
     // Weight bounds for tokenization
     this.MIN_WEIGHT = 0.8;
     this.MAX_WEIGHT = 1.5;
-    
+
     // In-memory cache (LRU with 1000 max entries)
     this.cache = new Map();
     this.MAX_CACHE_SIZE = 1000;
     this.cacheHits = 0;
     this.cacheMisses = 0;
-    
+
     // Negative prompt defaults
     this.DEFAULT_NEGATIVE_PROMPT = [
       'blurry', 'low quality', 'distorted', 'deformed',
@@ -137,7 +137,7 @@ class IntelligentPromptBuilder {
       SELECT * FROM ultra_detailed_descriptors
       WHERE user_id = $1
     `;
-    
+
     const params = [userId];
     let paramIndex = 2;
 
@@ -175,7 +175,7 @@ class IntelligentPromptBuilder {
       userModifiers = [],              // ADD THIS
       respectUserIntent = false        // ADD THIS
     } = options;
-    
+
     // Aggregate preferences from descriptors
     const preferences = this.aggregatePreferences(descriptors);
 
@@ -185,32 +185,35 @@ class IntelligentPromptBuilder {
     // Build weighted prompt components in CORRECT ORDER
     const components = [];
 
-    // 1. STYLE CONTEXT (use relevant style tags)
+    // 1. AESTHETIC THEME (highest priority - sets the tone)
     if (selected.styleContext) {
-      components.push(this.formatToken(`${selected.styleContext}`, 1.2));
+      const aestheticName = String(selected.styleContext).toLowerCase().trim();
+      components.push(this.formatToken(aestheticName, 1.4));
+    } else {
+      components.push(this.formatToken('contemporary', 1.4));
     }
 
     // 2. PRIMARY GARMENT (highest weight)
     if (selected.garment) {
       // Build comprehensive garment description
       const garmentParts = [];
-      
+
       // Silhouette first (if available)
       if (selected.garment.silhouette) {
         garmentParts.push(selected.garment.silhouette);
       }
-      
+
       // Fit
       if (selected.garment.fit) {
         garmentParts.push(selected.garment.fit);
       }
-      
+
       // Garment type
       garmentParts.push(selected.garment.type);
-      
+
       const garmentDesc = garmentParts.join(', ');
       components.push(this.formatToken(garmentDesc, 1.3));
-      
+
       // Add specific construction details
       if (selected.garment.details && selected.garment.details.length > 0) {
         for (const detail of selected.garment.details.slice(0, 2)) {
@@ -221,10 +224,10 @@ class IntelligentPromptBuilder {
 
     // 3. FABRIC & MATERIAL (high weight)
     if (selected.fabric) {
-      const fabricDesc = selected.fabric.finish 
+      const fabricDesc = selected.fabric.finish
         ? `in ${selected.fabric.material} fabric, with ${selected.fabric.finish} finish`
         : `in ${selected.fabric.material} fabric`;
-      
+
       components.push(this.formatToken(fabricDesc, 1.2));
     }
 
@@ -239,11 +242,11 @@ class IntelligentPromptBuilder {
       // Shot type (learned from portfolio)
       const shotType = selected.pose.shot_type || 'three-quarter length shot';
       components.push(this.formatToken(shotType, 1.3));
-      
+
       // Body position - ALWAYS front-facing unless user portfolio shows otherwise
       const bodyPosition = selected.pose.body_position || 'standing front-facing';
       components.push(this.formatToken(bodyPosition, 1.2));
-      
+
       // Pose details
       if (selected.pose.pose_style) {
         components.push(this.formatToken(selected.pose.pose_style, 1.1));
@@ -264,10 +267,10 @@ class IntelligentPromptBuilder {
 
     // 7. LIGHTING (medium-high weight)
     if (selected.photography && selected.photography.lighting) {
-      const lightingDesc = selected.photography.lighting_direction 
+      const lightingDesc = selected.photography.lighting_direction
         ? `${selected.photography.lighting} from ${selected.photography.lighting_direction}`
         : selected.photography.lighting;
-      
+
       components.push(this.formatToken(lightingDesc, 1.1));
     } else {
       components.push(this.formatToken('soft lighting from front', 1.1));
@@ -277,19 +280,19 @@ class IntelligentPromptBuilder {
     if (selected.photography) {
       // Camera angle - ALWAYS PREFER FRONT ANGLES
       let angle = selected.photography.angle || '3/4 front angle';
-      
+
       // Override side/back angles to front
       if (angle.includes('side') || angle.includes('back') || angle.includes('profile')) {
         angle = '3/4 front angle';
         logger.info('Overriding non-front angle to 3/4 front', { originalAngle: selected.photography.angle });
       }
-      
+
       components.push(this.formatToken(angle, 1.2));
-      
+
       // Camera height
       const height = selected.photography.height || 'eye level';
       components.push(this.formatToken(`at ${height}`, 1.0));
-      
+
       // Background
       if (selected.photography.background) {
         components.push(this.formatToken(`${selected.photography.background} background`, 1.0));
@@ -313,7 +316,7 @@ class IntelligentPromptBuilder {
     // ========== NEW: APPLY USER MODIFIERS WITH WEIGHTING ==========
     // If user gave specific command (high specificity), weight their terms more heavily
     const userModifierWeight = respectUserIntent ? 2.0 : 1.0;
-    
+
     // Apply user modifiers
     if (userModifiers.length > 0) {
       // Remove any empty or duplicate modifiers
@@ -327,19 +330,22 @@ class IntelligentPromptBuilder {
           weight: userModifierWeight,
           modifiers: cleanedModifiers
         });
-        
-        const weightedModifiers = cleanedModifiers.map(modifier => 
-          `(${modifier}:${userModifierWeight})`
+
+        const weightedModifiers = cleanedModifiers.map(modifier =>
+          this.formatToken(modifier, userModifierWeight)
         );
         components.push(...weightedModifiers);
-        
+
       } else {
         // LOW SPECIFICITY: Normal weighting, more creative freedom
         logger.info('Applying user modifiers with standard weighting', {
           modifiers: cleanedModifiers
         });
-        
-        components.push(...cleanedModifiers);
+
+        const weightedModifiers = cleanedModifiers.map(modifier =>
+          this.formatToken(modifier, 1.0)
+        );
+        components.push(...weightedModifiers);
       }
     }
     // ===================================================================
@@ -347,15 +353,20 @@ class IntelligentPromptBuilder {
     // ========== NEW: ADD VARIATION INSTRUCTIONS ==========
     // Guide the AI on how creative vs literal to be
     if (creativity >= 1.0) {
-      components.push('explore creative variations, interpret broadly, diverse interpretations');
+      components.push(this.formatToken('explore creative variations', 0.9));
+      components.push(this.formatToken('interpret broadly', 0.8));
+      components.push(this.formatToken('diverse interpretations', 0.8));
       logger.debug('Added high variation instructions');
-      
+
     } else if (creativity >= 0.6) {
-      components.push('balanced interpretation, some creative freedom');
+      components.push(this.formatToken('balanced interpretation', 0.9));
+      components.push(this.formatToken('some creative freedom', 0.8));
       logger.debug('Added medium variation instructions');
-      
+
     } else if (creativity <= 0.5) {
-      components.push('precise execution, literal interpretation, exact specifications');
+      components.push(this.formatToken('precise execution', 1.2));
+      components.push(this.formatToken('literal interpretation', 1.1));
+      components.push(this.formatToken('exact specifications', 1.0));
       logger.debug('Added low variation instructions');
     }
     // ====================================================
@@ -416,21 +427,21 @@ class IntelligentPromptBuilder {
       const photography = this.safeParseJSON(desc.photography, {});
       const stylingContext = this.safeParseJSON(desc.styling_context, {});
       const contextual = this.safeParseJSON(desc.contextual_attributes, {});
-      
+
       // Extract fabric, color, and construction details from garments
       const fabrics = [];
       const colors = [];
       const construction = [];
-      
+
       for (const garment of garments) {
         if (garment.fabric) {
           fabrics.push(garment.fabric);
         }
-        
+
         if (garment.color_palette) {
           colors.push(...garment.color_palette);
         }
-        
+
         if (garment.construction) {
           construction.push(garment.construction);
         }
@@ -449,8 +460,8 @@ class IntelligentPromptBuilder {
       for (const fabric of fabrics) {
         const key = fabric.primary_material || fabric.material || fabric.type;
         if (!preferences.fabrics[key]) {
-          preferences.fabrics[key] = { 
-            count: 0, 
+          preferences.fabrics[key] = {
+            count: 0,
             data: {
               material: fabric.primary_material || fabric.material || fabric.type,
               finish: fabric.sheen || fabric.finish
@@ -563,21 +574,21 @@ class IntelligentPromptBuilder {
    */
   determineFacingDirection(pose) {
     if (!pose) return 'front-facing';
-    
+
     const gaze = pose.gaze?.toLowerCase() || '';
     const head = pose.head?.toLowerCase() || '';
     const bodyPos = pose.body_position?.toLowerCase() || '';
-    
+
     // Check if model is facing camera
     if (gaze.includes('camera') || head.includes('straight') || bodyPos.includes('front')) {
       return 'front-facing';
     }
-    
+
     // Check for side/profile poses (we want to avoid these)
     if (gaze.includes('away') || head.includes('turned') || bodyPos.includes('profile')) {
       return 'profile'; // Will be overridden to front-facing in prompt building
     }
-    
+
     // Default to front-facing
     return 'front-facing';
   }
@@ -587,15 +598,15 @@ class IntelligentPromptBuilder {
    */
   describePoseStyle(pose) {
     if (!pose) return 'confident pose';
-    
+
     const bodyLanguage = pose.body_language?.toLowerCase() || '';
     const posture = pose.posture?.toLowerCase() || '';
-    
+
     if (bodyLanguage.includes('confident')) return 'confident pose';
     if (bodyLanguage.includes('relaxed')) return 'relaxed pose';
     if (bodyLanguage.includes('dynamic')) return 'dynamic pose';
     if (posture.includes('upright')) return 'upright confident pose';
-    
+
     return 'confident pose';
   }
 
@@ -613,18 +624,18 @@ class IntelligentPromptBuilder {
    */
   ensureFrontAngle(angle) {
     const angleLower = angle.toLowerCase();
-    
+
     // If it's already a front angle, keep it
     if (angleLower.includes('front') || angleLower.includes('straight-on')) {
       return angle;
     }
-    
+
     // Override side, back, or profile angles
     if (angleLower.includes('side') || angleLower.includes('back') || angleLower.includes('profile')) {
       logger.info('Converting non-front angle to 3/4 front', { originalAngle: angle });
       return '3/4 front angle';
     }
-    
+
     // Default to 3/4 front
     return '3/4 front angle';
   }
@@ -705,7 +716,7 @@ class IntelligentPromptBuilder {
    */
   sampleCategory(preferenceDict, thompsonDict, shouldExplore) {
     const items = Object.keys(preferenceDict);
-    
+
     if (items.length === 0) return null;
 
     // Exploration: random selection
@@ -721,7 +732,7 @@ class IntelligentPromptBuilder {
     for (const key of items) {
       const params = thompsonDict[key] || { alpha: this.DEFAULT_ALPHA, beta: this.DEFAULT_BETA };
       const sample = this.betaSample(params.alpha, params.beta);
-      
+
       if (sample > bestSample) {
         bestSample = sample;
         bestKey = key;
@@ -736,7 +747,7 @@ class IntelligentPromptBuilder {
    */
   sampleMultiple(preferenceDict, thompsonDict, shouldExplore, n = 2) {
     const items = Object.keys(preferenceDict);
-    
+
     if (items.length === 0) return [];
 
     // Exploration: random selection
@@ -755,7 +766,7 @@ class IntelligentPromptBuilder {
     });
 
     samples.sort((a, b) => b.sample - a.sample);
-    
+
     return samples.slice(0, n).map(s => preferenceDict[s.key].data);
   }
 
@@ -767,12 +778,12 @@ class IntelligentPromptBuilder {
     const mean = alpha / (alpha + beta);
     const variance = (alpha * beta) / (Math.pow(alpha + beta, 2) * (alpha + beta + 1));
     const stdDev = Math.sqrt(variance);
-    
+
     // Sample from normal approximation
     const u1 = Math.random();
     const u2 = Math.random();
     const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-    
+
     const sample = mean + stdDev * z;
     return Math.max(0, Math.min(1, sample));
   }
@@ -781,27 +792,35 @@ class IntelligentPromptBuilder {
    * Format token with weight for SD/Flux
    */
   formatToken(text, weight) {
-    if (weight < 1.0) {
-      return text;
-    }
-    
-    // Clamp weight
-    weight = Math.max(this.MIN_WEIGHT, Math.min(this.MAX_WEIGHT, weight));
-    
-    // Format: (token:weight)
-    return `(${text}:${weight.toFixed(1)})`;
+    // Always apply weighting (including < 1.0)
+    const clamped = Math.max(this.MIN_WEIGHT, Math.min(this.MAX_WEIGHT, Number(weight) || 1.0));
+    // Format: [token:weight] using brackets for emphasis-compatible models
+    return `[${String(text)}:${clamped.toFixed(1)}]`;
   }
 
   /**
    * Build negative prompt
    */
   buildNegativePrompt(selected) {
-    const negative = [this.DEFAULT_NEGATIVE_PROMPT];
+    const negative = [this.buildDefaultNegativePrompt()];
 
     // Add user-specific negatives based on preferences
     // (can be extended based on what user dislikes)
 
     return negative.join(', ');
+  }
+
+  /**
+   * Build default negative prompt with weights
+   */
+  buildDefaultNegativePrompt() {
+    const NEGATIVE_WEIGHT = 1.2;
+    const terms = (this.DEFAULT_NEGATIVE_PROMPT || '')
+      .split(',')
+      .map(t => t.trim())
+      .filter(Boolean);
+    if (terms.length === 0) return '';
+    return terms.map(t => this.formatToken(t, NEGATIVE_WEIGHT)).join(', ');
   }
 
   /**
@@ -817,6 +836,7 @@ class IntelligentPromptBuilder {
     const fabric = fabrics[Math.floor(Math.random() * fabrics.length)];
 
     const positive = [
+      this.formatToken('contemporary', 1.4),
       this.formatToken(`${garment}`, 1.3),
       this.formatToken(`${fabric}`, 1.2),
       this.formatToken(`${color}`, 1.3),
@@ -854,10 +874,10 @@ class IntelligentPromptBuilder {
   async savePrompt(userId, data) {
     const query = `
       INSERT INTO prompts (
-        user_id, 
-        text, 
-        json_spec, 
-        mode, 
+        user_id,
+        text,
+        json_spec,
+        mode,
         weights,
         created_at
       )
@@ -909,7 +929,7 @@ class IntelligentPromptBuilder {
     // Get the prompt
     const promptQuery = `SELECT metadata FROM prompts WHERE id = $1`;
     const promptResult = await db.query(promptQuery, [promptId]);
-    
+
     if (promptResult.rows.length === 0) {
       logger.warn('Prompt not found for feedback update', { promptId });
       return;
@@ -931,7 +951,7 @@ class IntelligentPromptBuilder {
       if (!value) continue;
 
       let attributes = [];
-      
+
       if (Array.isArray(value)) {
         attributes = value.map(v => this.extractAttributeKey(v));
       } else if (typeof value === 'object') {
@@ -992,7 +1012,7 @@ class IntelligentPromptBuilder {
       const firstKey = this.cache.keys().next().value;
       this.cache.delete(firstKey);
     }
-    
+
     this.cache.set(key, value);
   }
 
@@ -1024,7 +1044,7 @@ class IntelligentPromptBuilder {
   /**
    * Extract Brand DNA from enhanced style profile
    * This creates a distilled representation of the designer's signature
-   * 
+   *
    * @param {Object} styleProfile - Enhanced style profile from TrendAnalysisAgent
    * @returns {Object} Brand DNA object
    */
@@ -1041,7 +1061,7 @@ class IntelligentPromptBuilder {
 
       // 2. SIGNATURE COLORS (top 3, weighted by distribution)
       const signatureColors = this.extractTopDistribution(
-        styleProfile.color_distribution || {}, 
+        styleProfile.color_distribution || {},
         3
       ).map(c => ({
         name: c.key,
@@ -1153,7 +1173,7 @@ class IntelligentPromptBuilder {
     });
 
     const total = Object.values(shotTypeCounts).reduce((sum, count) => sum + count, 0);
-    
+
     return Object.entries(shotTypeCounts)
       .map(([type, count]) => ({
         type,
@@ -1178,7 +1198,7 @@ class IntelligentPromptBuilder {
     });
 
     const total = Object.values(lightingCounts).reduce((sum, count) => sum + count, 0);
-    
+
     return Object.entries(lightingCounts)
       .map(([type, count]) => ({
         type,
@@ -1203,7 +1223,7 @@ class IntelligentPromptBuilder {
     });
 
     const total = Object.values(angleCounts).reduce((sum, count) => sum + count, 0);
-    
+
     return Object.entries(angleCounts)
       .map(([angle, count]) => ({
         angle,
@@ -1229,7 +1249,7 @@ class IntelligentPromptBuilder {
       'brown': '#964b00',
       'burgundy': '#800020'
     };
-    
+
     return colorMap[colorName.toLowerCase()] || '#808080';
   }
 
@@ -1245,18 +1265,18 @@ class IntelligentPromptBuilder {
       'cashmere': { texture: 'soft', drape: 'fluid', weight: 'light' },
       'denim': { texture: 'rough', drape: 'stiff', weight: 'heavy' }
     };
-    
-    return fabricMap[fabricName.toLowerCase()] || { 
-      texture: 'smooth', 
-      drape: 'structured', 
-      weight: 'medium' 
+
+    return fabricMap[fabricName.toLowerCase()] || {
+      texture: 'smooth',
+      drape: 'structured',
+      weight: 'medium'
     };
   }
 
   /**
    * Get enhanced style profile for a user
    * This includes all the rich data needed for brand DNA
-   * 
+   *
    * @param {string} userId - User ID
    * @returns {Promise<Object>} Enhanced style profile
    */
@@ -1264,7 +1284,7 @@ class IntelligentPromptBuilder {
     try {
       // Get the style profile with all enrichments
       const query = `
-        SELECT 
+        SELECT
           sp.*,
           (
             SELECT json_agg(
@@ -1288,14 +1308,14 @@ class IntelligentPromptBuilder {
       `;
 
       const result = await db.query(query, [userId]);
-      
+
       if (result.rows.length === 0) {
         logger.warn('No style profile found for user', { userId });
         return null;
       }
 
       const profile = result.rows[0];
-      
+
       // Parse JSON fields
       return {
         ...profile,
@@ -1319,7 +1339,7 @@ class IntelligentPromptBuilder {
 
   /**
    * Calculate how consistent a generated prompt/image is with brand DNA
-   * 
+   *
    * @param {Object} selected - Thompson sampled selections
    * @param {Object} brandDNA - Extracted brand DNA
    * @returns {number} Consistency score 0-1
@@ -1342,7 +1362,7 @@ class IntelligentPromptBuilder {
     maxScore += 25;
     if (selected.colors && selected.colors.length > 0) {
       const brandColors = brandDNA.signatureColors.map(c => c.name);
-      const matchedColors = selected.colors.filter(c => 
+      const matchedColors = selected.colors.filter(c =>
         brandColors.includes(c.name)
       );
       score += (matchedColors.length / selected.colors.length) * 25;
@@ -1383,7 +1403,7 @@ class IntelligentPromptBuilder {
     }
 
     const finalScore = maxScore > 0 ? score / maxScore : 0.5;
-    
+
     logger.debug('Brand consistency calculated', {
       score: finalScore.toFixed(2),
       components: {
@@ -1400,7 +1420,7 @@ class IntelligentPromptBuilder {
   /**
    * Thompson Sampling with brand DNA bias
    * Boosts selection probability for brand-aligned attributes
-   * 
+   *
    * @param {Object} preferenceDict - Attribute preferences
    * @param {Object} thompsonDict - Thompson parameters
    * @param {Array} brandPreferences - Brand DNA preferred attributes
@@ -1409,14 +1429,14 @@ class IntelligentPromptBuilder {
    * @returns {Object} Selected attribute
    */
   thompsonSampleWithBias(
-    preferenceDict, 
-    thompsonDict, 
-    brandPreferences = [], 
+    preferenceDict,
+    thompsonDict,
+    brandPreferences = [],
     shouldExplore = false,
     brandBoost = 1.5
   ) {
     const items = Object.keys(preferenceDict);
-    
+
     if (items.length === 0) return null;
 
     // Exploration: still random, but prefer brand attributes
@@ -1426,17 +1446,17 @@ class IntelligentPromptBuilder {
         const isBrand = brandPreferences.includes(key);
         return isBrand ? brandBoost : 1.0;
       });
-      
+
       const totalWeight = weights.reduce((sum, w) => sum + w, 0);
       let random = Math.random() * totalWeight;
-      
+
       for (let i = 0; i < items.length; i++) {
         random -= weights[i];
         if (random <= 0) {
           return preferenceDict[items[i]].data;
         }
       }
-      
+
       return preferenceDict[items[0]].data;
     }
 
@@ -1445,19 +1465,19 @@ class IntelligentPromptBuilder {
     let bestSample = -1;
 
     for (const key of items) {
-      const params = thompsonDict[key] || { 
-        alpha: this.DEFAULT_ALPHA, 
-        beta: this.DEFAULT_BETA 
+      const params = thompsonDict[key] || {
+        alpha: this.DEFAULT_ALPHA,
+        beta: this.DEFAULT_BETA
       };
-      
+
       let sample = this.betaSample(params.alpha, params.beta);
-      
+
       // Apply brand boost if this is a brand preference
       if (brandPreferences.includes(key)) {
         sample *= brandBoost;
         logger.debug('Applied brand boost', { attribute: key, boost: brandBoost });
       }
-      
+
       if (sample > bestSample) {
         bestSample = sample;
         bestKey = key;
@@ -1471,15 +1491,15 @@ class IntelligentPromptBuilder {
    * Thompson Sample Multiple with Brand Bias
    */
   thompsonSampleMultipleWithBias(
-    preferenceDict, 
-    thompsonDict, 
-    brandPreferences = [], 
+    preferenceDict,
+    thompsonDict,
+    brandPreferences = [],
     shouldExplore = false,
     n = 2,
     brandBoost = 1.5
   ) {
     const items = Object.keys(preferenceDict);
-    
+
     if (items.length === 0) return [];
 
     // Exploration: random selection with brand preference
@@ -1488,16 +1508,16 @@ class IntelligentPromptBuilder {
         const isBrand = brandPreferences.includes(key);
         return isBrand ? brandBoost : 1.0;
       });
-      
+
       // Weighted random sampling without replacement
       const selected = [];
       const availableItems = [...items];
       const availableWeights = [...weights];
-      
+
       for (let i = 0; i < Math.min(n, items.length); i++) {
         const totalWeight = availableWeights.reduce((sum, w) => sum + w, 0);
         let random = Math.random() * totalWeight;
-        
+
         for (let j = 0; j < availableItems.length; j++) {
           random -= availableWeights[j];
           if (random <= 0) {
@@ -1508,29 +1528,29 @@ class IntelligentPromptBuilder {
           }
         }
       }
-      
+
       return selected;
     }
 
     // Exploitation: Thompson Sampling with brand boost
     const samples = items.map(key => {
-      const params = thompsonDict[key] || { 
-        alpha: this.DEFAULT_ALPHA, 
-        beta: this.DEFAULT_BETA 
+      const params = thompsonDict[key] || {
+        alpha: this.DEFAULT_ALPHA,
+        beta: this.DEFAULT_BETA
       };
-      
+
       let sample = this.betaSample(params.alpha, params.beta);
-      
+
       // Apply brand boost
       if (brandPreferences.includes(key)) {
         sample *= brandBoost;
       }
-      
+
       return { key, sample };
     });
 
     samples.sort((a, b) => b.sample - a.sample);
-    
+
     return samples.slice(0, n).map(s => preferenceDict[s.key].data);
   }
 }

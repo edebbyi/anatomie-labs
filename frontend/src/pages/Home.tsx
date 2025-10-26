@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
-import { RotateCcw, Heart, X, XIcon, Grid3x3, Grid2x2, Info, Settings, Clock } from 'lucide-react';
+import { Heart, X, XIcon, Grid3x3, Grid2x2, Info, Settings, Clock } from 'lucide-react';
 import authAPI from '../services/authAPI';
 import CommandBar from '../components/CommandBar';
 import ImageCard from '../components/ImageCard';
-import ImageModal from '../components/ImageModal';
 
 interface GeneratedImage {
   id: string;
@@ -42,116 +41,169 @@ const ImageLightbox: React.FC<ImageLightboxProps> = ({
   onFeedback,
 }) => {
   const [isFlipped, setIsFlipped] = useState(false);
-  const [feedback, setFeedback] = useState<Record<string, 'liked' | 'disliked' | null>>({});
-  const [touchStart, setTouchStart] = useState({ x: 0, y: 0 });
-  const [touchCurrent, setTouchCurrent] = useState({ x: 0, y: 0 });
+  const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
-  const [swipeOffset, setSwipeOffset] = useState({ x: 0, y: 0 });
-  const [swipeFeedback, setSwipeFeedback] = useState<'like' | 'dislike' | null>(null);
-  const lightboxRef = useRef<HTMLDivElement>(null);
-
-  const [entered, setEntered] = useState(false);
-  const [enterFrom, setEnterFrom] = useState<'bottom' | 'top'>('bottom');
-  const prevIndexRef = useRef(currentIndex);
-  const [isClosing, setIsClosing] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
-  const [exitX, setExitX] = useState(0);
-  const [exitY, setExitY] = useState(0);
-  const wheelTimeRef = useRef(0);
-
+  
   const currentImage = images[currentIndex];
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowLeft' && currentIndex > 0) onPrevious();
+      if (e.key === 'ArrowRight' && currentIndex < images.length - 1) onNext();
+      if (e.key === 'i' || e.key === 'I') setIsFlipped(!isFlipped);
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentIndex, images.length, isFlipped, onClose, onNext, onPrevious]);
+
+  // Reset flip state when changing images
+  useEffect(() => {
+    setIsFlipped(false);
+  }, [currentIndex]);
+
+  // Touch handlers
   const handleTouchStart = (e: React.TouchEvent) => {
-    const touch = e.targetTouches[0];
+    const touch = e.touches[0];
     setTouchStart({ x: touch.clientX, y: touch.clientY });
-    setTouchCurrent({ x: touch.clientX, y: touch.clientY });
     setIsDragging(true);
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
-    if (!isDragging) return;
-
-    const touch = e.targetTouches[0];
-    setTouchCurrent({ x: touch.clientX, y: touch.clientY });
-
+    if (!touchStart || !isDragging) return;
+    
+    const touch = e.touches[0];
     const deltaX = touch.clientX - touchStart.x;
     const deltaY = touch.clientY - touchStart.y;
-
-    // Determine if horizontal or vertical swipe
-    if (Math.abs(deltaX) > Math.abs(deltaY)) {
-      // Horizontal swipe - for like/dislike
-      setSwipeOffset({ x: deltaX, y: 0 });
-      if (deltaX > 50) {
-        setSwipeFeedback('like');
-      } else if (deltaX < -50) {
-        setSwipeFeedback('dislike');
-      } else {
-        setSwipeFeedback(null);
-      }
-    } else {
-      // Vertical swipe - for navigation
-      setSwipeOffset({ x: 0, y: deltaY });
-      setSwipeFeedback(null);
-    }
+    
+    setDragOffset({ x: deltaX, y: deltaY });
   };
 
   const handleTouchEnd = () => {
-    if (!isDragging) return;
-
-    const deltaX = touchCurrent.x - touchStart.x;
-    const deltaY = touchCurrent.y - touchStart.y;
-
-    const isHorizontal = Math.abs(deltaX) > Math.abs(deltaY);
-
-    if (isHorizontal) {
-      // Horizontal swipe - like/dislike with exit animation
-      if (Math.abs(deltaX) > 120) {
-        const dir = deltaX > 0 ? 1 : -1; // right like, left dismiss
-        setIsExiting(true);
-        setExitX(dir * (window.innerWidth || 1000));
-        setSwipeFeedback(dir > 0 ? 'like' : 'dislike');
-        setTimeout(() => {
-          onFeedback(currentImage.id, dir > 0);
-          setFeedback({ ...feedback, [currentImage.id]: dir > 0 ? 'liked' : 'disliked' });
-          onNext();
-          setIsExiting(false);
-          setExitX(0);
-        }, 320);
+    if (!touchStart || !isDragging) return;
+    
+    const { x: deltaX } = dragOffset;
+    const threshold = 100;
+    
+    // Only horizontal swipe (like/dislike)
+    if (Math.abs(deltaX) > threshold) {
+      if (deltaX > 0) {
+        handleSwipeLike();
+      } else {
+        handleSwipePass();
       }
     } else {
-      // Vertical swipe - navigate between images
-      if (deltaY < -100 && currentIndex < images.length - 1) {
-        // Swipe up -> next
-        setIsExiting(true);
-        setExitY(-1 * (window.innerHeight || 800));
-        setTimeout(() => {
-          onNext();
-          setIsExiting(false);
-          setExitY(0);
-        }, 300);
-      } else if (deltaY > 100 && currentIndex > 0) {
-        // Swipe down -> previous
-        setIsExiting(true);
-        setExitY(1 * (window.innerHeight || 800));
-        setTimeout(() => {
-          onPrevious();
-          setIsExiting(false);
-          setExitY(0);
-        }, 300);
-      }
+      resetDrag();
     }
-
-    // Reset drag capture
-    setIsDragging(false);
-    setSwipeOffset({ x: 0, y: 0 });
-    setSwipeFeedback(null);
-    setTouchStart({ x: 0, y: 0 });
-    setTouchCurrent({ x: 0, y: 0 });
   };
 
-  const handleFeedback = (liked: boolean) => {
-    setFeedback({ ...feedback, [currentImage.id]: liked ? 'liked' : 'disliked' });
-    onFeedback(currentImage.id, liked);
+  // Mouse handlers for desktop drag
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setTouchStart({ x: e.clientX, y: e.clientY });
+    setIsDragging(true);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!touchStart || !isDragging) return;
+    
+    const deltaX = e.clientX - touchStart.x;
+    const deltaY = e.clientY - touchStart.y;
+    
+    setDragOffset({ x: deltaX, y: deltaY });
+  };
+
+  const handleMouseUp = () => {
+    if (!touchStart || !isDragging) return;
+    
+    const { x: deltaX } = dragOffset;
+    const threshold = 100;
+    
+    // Only horizontal drag (like/dislike)
+    if (Math.abs(deltaX) > threshold) {
+      if (deltaX > 0) {
+        handleSwipeLike();
+      } else {
+        handleSwipePass();
+      }
+    } else {
+      resetDrag();
+    }
+  };
+
+  // Add global mouse up listener to handle releasing outside the card
+  useEffect(() => {
+    if (isDragging) {
+      const handleGlobalMouseMove = (e: MouseEvent) => {
+        if (!touchStart) return;
+        const deltaX = e.clientX - touchStart.x;
+        const deltaY = e.clientY - touchStart.y;
+        setDragOffset({ x: deltaX, y: deltaY });
+      };
+
+      const handleGlobalMouseUp = () => {
+        if (!touchStart) return;
+        const { x: deltaX } = dragOffset;
+        const threshold = 100;
+        
+        if (Math.abs(deltaX) > threshold) {
+          if (deltaX > 0) {
+            handleSwipeLike();
+          } else {
+            handleSwipePass();
+          }
+        } else {
+          resetDrag();
+        }
+      };
+
+      window.addEventListener('mousemove', handleGlobalMouseMove);
+      window.addEventListener('mouseup', handleGlobalMouseUp);
+      
+      return () => {
+        window.removeEventListener('mousemove', handleGlobalMouseMove);
+        window.removeEventListener('mouseup', handleGlobalMouseUp);
+      };
+    }
+  }, [isDragging, touchStart, dragOffset]);
+
+  const resetDrag = () => {
+    setIsDragging(false);
+    setDragOffset({ x: 0, y: 0 });
+    setTouchStart(null);
+  };
+
+  const handleSwipeLike = () => {
+    setIsExiting(true);
+    setDragOffset({ x: window.innerWidth || 1000, y: 0 });
+    setTimeout(() => {
+      onFeedback(currentImage.id, true);
+      if (currentIndex < images.length - 1) {
+        onNext();
+      } else {
+        onClose();
+      }
+      setIsExiting(false);
+      resetDrag();
+    }, 300);
+  };
+
+  const handleSwipePass = () => {
+    setIsExiting(true);
+    setDragOffset({ x: -(window.innerWidth || 1000), y: 0 });
+    setTimeout(() => {
+      onFeedback(currentImage.id, false);
+      if (currentIndex < images.length - 1) {
+        onNext();
+      } else {
+        onClose();
+      }
+      setIsExiting(false);
+      resetDrag();
+    }, 300);
   };
 
   const formatDate = (date: Date) => {
@@ -164,259 +216,225 @@ const ImageLightbox: React.FC<ImageLightboxProps> = ({
     });
   };
 
-  // Animate entrance on index change
-  useEffect(() => {
-    const from: 'bottom' | 'top' = currentIndex > prevIndexRef.current ? 'bottom' : 'top';
-    setEnterFrom(from);
-    prevIndexRef.current = currentIndex;
-
-    setEntered(false);
-    const id = setTimeout(() => setEntered(true), 20);
-    return () => clearTimeout(id);
-  }, [currentIndex]);
-
-  const startClose = () => {
-    setIsClosing(true);
-    setTimeout(() => {
-      onClose();
-      setIsClosing(false);
-    }, 220);
+  const getTransform = () => {
+    if (isExiting) {
+      const { x } = dragOffset;
+      const rotation = x > 0 ? 15 : -15;
+      return `translateX(${x}px) rotate(${rotation}deg)`;
+    }
+    
+    if (isDragging) {
+      const rotation = Math.max(-15, Math.min(15, dragOffset.x / 20));
+      return `translate(${dragOffset.x}px, ${dragOffset.y}px) rotate(${rotation}deg)`;
+    }
+    
+    return 'translate(0, 0) rotate(0deg)';
   };
 
-  useEffect(() => {
-    const handleKeyPress = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') startClose();
-      if (e.key === 'ArrowLeft') {
-        onPrevious();
-      }
-      if (e.key === 'ArrowRight') {
-        onNext();
-      }
-      // Add support for up/down arrow keys to navigate images
-      if (e.key === 'ArrowUp') {
-        onPrevious();
-      }
-      if (e.key === 'ArrowDown') {
-        onNext();
-      }
-      // Add 'i' key to flip card
-      if (e.key === 'i' || e.key === 'I') {
-        setIsFlipped(!isFlipped);
-      }
-    };
-    window.addEventListener('keydown', handleKeyPress);
-    return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [onClose, onNext, onPrevious, isFlipped]);
-
-  // Scroll handler for mouse wheel navigation (throttled)
-  const handleWheel = (e: React.WheelEvent) => {
-    const now = Date.now();
-    if (now - wheelTimeRef.current < 450) return;
-    wheelTimeRef.current = now;
-
-    if (e.deltaY < 0 && currentIndex > 0) {
-      // Scroll up -> previous image (card moves down)
-      setIsExiting(true);
-      setExitY(1 * (window.innerHeight || 800));
-      setTimeout(() => {
-        onPrevious();
-        setIsExiting(false);
-        setExitY(0);
-      }, 300);
-    } else if (e.deltaY > 0 && currentIndex < images.length - 1) {
-      // Scroll down -> next image (card moves up)
-      setIsExiting(true);
-      setExitY(-1 * (window.innerHeight || 800));
-      setTimeout(() => {
-        onNext();
-        setIsExiting(false);
-        setExitY(0);
-      }, 300);
+  const getOpacity = () => {
+    if (isExiting) return 0;
+    if (isDragging) {
+      const distance = Math.sqrt(dragOffset.x ** 2 + dragOffset.y ** 2);
+      return Math.max(0.5, 1 - distance / 500);
     }
+    return 1;
   };
 
   return (
-    <div
-      ref={lightboxRef}
-      className="fixed inset-0 w-screen h-screen bg-black/85 z-50 overflow-y-auto overscroll-contain transition-opacity"
-      onWheel={handleWheel}
-      onClick={startClose}
-      style={{ opacity: isClosing ? 0 : 1 }}
+    <div 
+      className="fixed inset-0 bg-black/90 z-50 overflow-hidden"
+      onClick={onClose}
     >
       {/* Close button */}
       <button
-        onClick={(e) => { e.stopPropagation(); startClose(); }}
-        className="absolute top-6 right-6 z-50 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors"
-        aria-label="Close lightbox"
+        onClick={(e) => { e.stopPropagation(); onClose(); }}
+        className="absolute top-4 right-4 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors z-50"
+        aria-label="Close"
       >
         <XIcon className="w-6 h-6" />
       </button>
 
-      {/* Swipe Instructions */}
-      <div className="absolute top-6 left-1/2 -translate-x-1/2 text-white/60 text-sm text-center select-none pointer-events-none">
-        <p>Swipe ↑ ↓ to navigate | Swipe → to like | Swipe ← to pass</p>
+      {/* Instructions */}
+      <div className="absolute top-6 left-1/2 -translate-x-1/2 text-white/60 text-sm text-center pointer-events-none z-40">
+        <p>Drag → to like • Drag ← to pass • Arrow keys to browse</p>
       </div>
 
       {/* Counter */}
-      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 text-white text-base font-medium pointer-events-none">
+      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 text-white text-lg font-medium pointer-events-none z-40">
         {currentIndex + 1} / {images.length}
       </div>
 
-      {/* Main Content with Swipe Animation */}
-      <div
-        className="relative w-full min-h-[100vh]"
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-      >
-        {/* Sticky centered card wrapper to keep card fixed while scrolling */}
-        <div className="sticky top-0 h-screen flex items-center justify-center">
+      {/* Swipeable Card Container - positioned higher */}
+      <div className="absolute inset-0 flex items-center justify-center" style={{ paddingTop: '3rem', paddingBottom: '8rem' }}>
+        <div
+          className="relative w-[85vw] h-full max-w-5xl max-h-[70vh]"
+          onClick={(e) => e.stopPropagation()}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          style={{
+            perspective: '1000px',
+            cursor: isDragging ? 'grabbing' : 'grab',
+          }}
+        >
+        <div
+          className="relative w-full h-full"
+          style={{
+            transform: getTransform(),
+            opacity: getOpacity(),
+            transition: isDragging ? 'none' : 'transform 0.3s ease, opacity 0.3s ease',
+            transformStyle: 'preserve-3d',
+          }}
+        >
+          {/* Card Inner (with flip) */}
           <div
-            className="relative w-[90vw] h-[90vh] cursor-pointer"
-            onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }}
+            className="relative w-full h-full"
             style={{
-              perspective: '1000px',
-              transform: `translate(${isExiting ? exitX : swipeOffset.x}px, ${isExiting ? exitY : swipeOffset.y}px) rotate(${(isExiting && exitX !== 0) ? (exitX > 0 ? 12 : -12) : (isDragging && Math.abs(swipeOffset.x) > Math.abs(swipeOffset.y) ? Math.max(-12, Math.min(12, swipeOffset.x / 10)) : 0)}deg) scale(${entered ? 1 : 0.8})`,
-              transition: isDragging ? 'none' : 'transform 0.35s ease, opacity 0.35s ease',
-              opacity: isClosing ? 0 : (isExiting ? 0 : 1),
+              transformStyle: 'preserve-3d',
+              transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
+              transition: 'transform 0.6s',
             }}
           >
+            {/* Front: Image */}
             <div
-              style={{
-                transformStyle: 'preserve-3d',
-                transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
-                transition: 'transform 0.6s',
-              }}
-              className="relative w-full h-full"
+              className="absolute inset-0 rounded-2xl overflow-hidden bg-black flex items-center justify-center"
+              style={{ backfaceVisibility: 'hidden' }}
             >
-              {/* Front: Image */}
-              <div
-                style={{ backfaceVisibility: 'hidden' }}
-                className="absolute inset-0 flex items-center justify-center"
-              >
-                <img
-                  src={currentImage.url}
-                  alt={currentImage.prompt}
-                  className="max-w-full max-h-full object-contain"
-                  draggable={false}
-                />
-                {/* Info Icon Indicator */}
-                <div className="absolute top-6 right-6 bg-white/20 hover:bg-white/30 rounded-full p-3 transition-opacity">
-                  <Info className="w-6 h-6 text-white" />
-                </div>
-              </div>
-
-              {/* Back: Prompt and Details */}
-              <div
-                style={{
-                  backfaceVisibility: 'hidden',
-                  transform: 'rotateY(180deg)',
+              <img
+                src={currentImage.url}
+                alt={currentImage.prompt}
+                className="max-w-full max-h-full object-contain"
+                draggable={false}
+              />
+              
+              {/* Info button overlay */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsFlipped(!isFlipped);
                 }}
-                className="absolute inset-0 bg-gradient-to-br from-gray-900 to-black p-12 flex flex-col"
+                className="absolute top-4 right-4 bg-white/20 hover:bg-white/30 rounded-full p-3 transition-colors z-10"
+                aria-label="Show info"
               >
-                <div className="flex-1 overflow-y-auto">
-                  <h3 className="text-2xl font-semibold text-white mb-6">Prompt</h3>
-                  <p className="text-gray-200 text-lg leading-relaxed mb-10">
-                    {currentImage.prompt}
-                  </p>
+                <Info className="w-6 h-6 text-white" />
+              </button>
 
-                  <div className="mt-8">
-                    <h4 className="text-xl font-semibold text-gray-300 mb-6">Details</h4>
-                    <div className="space-y-4 text-lg">
-                      <div className="flex justify-between">
-                        <span className="text-gray-400">Generated:</span>
-                        <span className="text-gray-100">
-                          {formatDate(currentImage.timestamp)}
-                        </span>
-                      </div>
-
-                      {currentImage.metadata?.garmentType && (
-                        <div className="flex justify-between">
-                          <span className="text-gray-400">Garment:</span>
-                          <span className="text-gray-100 capitalize">
-                            {currentImage.metadata.garmentType}
-                          </span>
-                        </div>
-                      )}
-
-                      {currentImage.metadata?.colors && currentImage.metadata.colors.length > 0 && (
-                        <div>
-                          <span className="text-gray-400 block mb-3">Colors:</span>
-                          <div className="flex flex-wrap gap-2">
-                            {currentImage.metadata.colors.map((color, idx) => (
-                              <span
-                                key={idx}
-                                className="px-4 py-2 bg-white/10 text-gray-200 rounded-full text-base capitalize"
-                              >
-                                {color}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {currentImage.metadata?.silhouette && (
-                        <div className="flex justify-between">
-                          <span className="text-gray-400">Silhouette:</span>
-                          <span className="text-gray-100 capitalize">
-                            {currentImage.metadata.silhouette}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+              {/* Swipe feedback overlays */}
+              {isDragging && Math.abs(dragOffset.x) > Math.abs(dragOffset.y) && (
+                <div
+                  className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                  style={{
+                    backgroundColor: dragOffset.x > 0 
+                      ? `rgba(34, 197, 94, ${Math.min(Math.abs(dragOffset.x) / 200, 0.5)})` 
+                      : `rgba(239, 68, 68, ${Math.min(Math.abs(dragOffset.x) / 200, 0.5)})`,
+                  }}
+                >
+                  {dragOffset.x > 0 ? (
+                    <Heart className="w-24 h-24 text-white fill-white" />
+                  ) : (
+                    <X className="w-24 h-24 text-white" />
+                  )}
                 </div>
-
-                <div className="mt-8 pt-6 border-t border-white/10 text-center">
-                  <p className="text-base text-gray-400">Click to flip back | Press I key</p>
-                </div>
-              </div>
+              )}
             </div>
 
-            {/* Bottom Like/Pass Controls over the card */}
-            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-50 flex items-center gap-8 pointer-events-auto">
+            {/* Back: Details */}
+            <div
+              className="absolute inset-0 bg-gradient-to-br from-gray-900 to-black rounded-2xl p-8 overflow-y-auto"
+              style={{
+                backfaceVisibility: 'hidden',
+                transform: 'rotateY(180deg)',
+              }}
+            >
+              {/* Info button on back to flip back */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  setSwipeFeedback('dislike');
-                  setIsExiting(true);
-                  setExitX(-1 * (window.innerWidth || 1000));
-                  setTimeout(() => {
-                    handleFeedback(false);
-                    onNext();
-                    setIsExiting(false);
-                    setExitX(0);
-                  }, 320);
+                  setIsFlipped(!isFlipped);
                 }}
-                className="w-14 h-14 rounded-full bg-white text-gray-800 shadow-lg flex items-center justify-center hover:scale-105 active:scale-95 transition-transform"
-                aria-label="Pass"
+                className="absolute top-4 right-4 bg-white/20 hover:bg-white/30 rounded-full p-3 transition-colors z-10"
+                aria-label="Hide info"
               >
-                <X className="w-7 h-7" />
+                <Info className="w-6 h-6 text-white" />
               </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSwipeFeedback('like');
-                  setIsExiting(true);
-                  setExitX(1 * (window.innerWidth || 1000));
-                  setTimeout(() => {
-                    handleFeedback(true);
-                    onNext();
-                    setIsExiting(false);
-                    setExitX(0);
-                  }, 320);
-                }}
-                className="w-14 h-14 rounded-full bg-white text-gray-800 shadow-lg flex items-center justify-center hover:scale-105 active:scale-95 transition-transform"
-                aria-label="Like"
-              >
-                <Heart className="w-7 h-7" />
-              </button>
+
+              <h3 className="text-2xl font-semibold text-white mb-4">Prompt</h3>
+              <p className="text-gray-200 text-base leading-relaxed mb-8">
+                {currentImage.prompt}
+              </p>
+
+              <h4 className="text-xl font-semibold text-gray-300 mb-4">Details</h4>
+              <div className="space-y-3">
+                <div className="flex justify-between text-base">
+                  <span className="text-gray-400">Generated:</span>
+                  <span className="text-gray-100">{formatDate(currentImage.timestamp)}</span>
+                </div>
+
+                {currentImage.metadata?.garmentType && (
+                  <div className="flex justify-between text-base">
+                    <span className="text-gray-400">Garment:</span>
+                    <span className="text-gray-100 capitalize">{currentImage.metadata.garmentType}</span>
+                  </div>
+                )}
+
+                {currentImage.metadata?.silhouette && (
+                  <div className="flex justify-between text-base">
+                    <span className="text-gray-400">Silhouette:</span>
+                    <span className="text-gray-100 capitalize">{currentImage.metadata.silhouette}</span>
+                  </div>
+                )}
+
+                {currentImage.metadata?.colors && currentImage.metadata.colors.length > 0 && (
+                  <div>
+                    <span className="text-gray-400 block mb-2">Colors:</span>
+                    <div className="flex flex-wrap gap-2">
+                      {currentImage.metadata.colors.map((color, idx) => (
+                        <span
+                          key={idx}
+                          className="px-3 py-1 bg-white/10 text-gray-200 rounded-full text-sm capitalize"
+                        >
+                          {color}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-8 pt-6 border-t border-white/10 text-center">
+                <p className="text-sm text-gray-400">Click info button or press I key to flip back</p>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Scroll spacer to show scrollbar movement */}
-        <div aria-hidden className="pointer-events-none" style={{ height: `${Math.max(1, images.length) * 100}vh` }} />
+        {/* Action buttons - pass and like only */}
+        <div className="absolute -bottom-24 left-1/2 -translate-x-1/2 flex items-center gap-8 pointer-events-auto">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleSwipePass();
+            }}
+            className="w-16 h-16 rounded-full bg-white hover:bg-gray-100 text-gray-800 shadow-2xl flex items-center justify-center transition-transform hover:scale-110 active:scale-95"
+            aria-label="Pass"
+          >
+            <X className="w-8 h-8" />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleSwipeLike();
+            }}
+            className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 text-white shadow-2xl flex items-center justify-center transition-transform hover:scale-110 active:scale-95"
+            aria-label="Like"
+          >
+            <Heart className="w-8 h-8 fill-current" />
+          </button>
+        </div>
+      </div>
       </div>
     </div>
   );
@@ -429,20 +447,16 @@ const Home: React.FC = () => {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [gridView, setGridView] = useState<'small' | 'large'>('large');
-  const [touchStart, setTouchStart] = useState({ x: 0, y: 0 });
-  const [touchEnd, setTouchEnd] = useState(0);
   const [shouldHighlightSuggestions, setShouldHighlightSuggestions] = useState(true);
   const [feedback, setFeedback] = useState<Record<string, 'liked' | 'disliked' | null>>({});
   const [autoGenerate, setAutoGenerate] = useState(false);
   const [nextRunTime, setNextRunTime] = useState<string>('');
   const [showSettings, setShowSettings] = useState(false);
-  const gridRef = useRef<HTMLDivElement>(null);
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     loadImages();
 
-    // Calculate next run time for auto-generate
     const now = new Date();
     const next = new Date(now);
     next.setDate(next.getDate() + 1);
@@ -455,13 +469,8 @@ const Home: React.FC = () => {
       hour12: true,
     });
 
-    if (isToday) {
-      setNextRunTime(`Today at ${time}`);
-    } else {
-      setNextRunTime(`Tomorrow at ${time}`);
-    }
+    setNextRunTime(isToday ? `Today at ${time}` : `Tomorrow at ${time}`);
 
-    // Set a timer to stop highlighting after 60 seconds
     if (highlightTimeoutRef.current) {
       clearTimeout(highlightTimeoutRef.current);
     }
@@ -480,19 +489,16 @@ const Home: React.FC = () => {
 
   useEffect(() => {
     if (location.pathname === '/home') {
-      // Reset the highlighting when navigating to the home page
       setShouldHighlightSuggestions(true);
 
-      // Clear any existing timeout
       if (highlightTimeoutRef.current) {
         clearTimeout(highlightTimeoutRef.current);
       }
 
-      // Set a new timeout to stop highlighting after 60 seconds
       highlightTimeoutRef.current = setTimeout(() => {
         setShouldHighlightSuggestions(false);
         highlightTimeoutRef.current = null;
-      }, 60000); // Stop highlighting after 60 seconds
+      }, 60000);
     }
 
     return () => {
@@ -509,7 +515,6 @@ const Home: React.FC = () => {
       const designerId = currentUser.id;
 
       if (!designerId) {
-        // Not logged in, check localStorage only
         const storedImages = localStorage.getItem('generatedImages');
         if (storedImages) {
           const parsed = JSON.parse(storedImages);
@@ -519,7 +524,6 @@ const Home: React.FC = () => {
         return;
       }
 
-      // Fetch from backend (via Node.js API)
       const token = authAPI.getToken();
       const response = await fetch(`http://localhost:3001/api/podna/gallery`, {
         headers: {
@@ -532,11 +536,9 @@ const Home: React.FC = () => {
       }
 
       const result = await response.json();
-      console.log('📸 Images API response for user:', designerId, result);
 
       if (result.success && result.data && result.data.generations && result.data.generations.length > 0) {
         const loadedImages: GeneratedImage[] = result.data.generations.map((img: any) => {
-          console.log('🖼️ Processing image:', img);
           const timestamp = img.createdAt ? new Date(img.createdAt) : new Date();
           return {
             id: img.id || `img-${Date.now()}-${Math.random()}`,
@@ -547,22 +549,16 @@ const Home: React.FC = () => {
             tags: img.tags || []
           };
         });
-        console.log('✅ Loaded images for user', designerId, ':', loadedImages.length);
         setImages(loadedImages);
-        // Save to localStorage with user ID to prevent cross-contamination
         localStorage.setItem(`generatedImages_${designerId}`, JSON.stringify(loadedImages));
-        // Clear old generatedImages key
         localStorage.removeItem('generatedImages');
       } else {
-        // No images from API - clear state instead of using old data
-        console.log('No images found for user:', designerId);
         setImages([]);
         localStorage.removeItem(`generatedImages_${designerId}`);
         localStorage.removeItem('generatedImages');
       }
     } catch (error) {
       console.error('Error loading images:', error);
-      // Don't fallback to old user's data - just show empty
       setImages([]);
     } finally {
       setLoading(false);
@@ -579,7 +575,7 @@ const Home: React.FC = () => {
         return;
       }
 
-      console.log(`📊 Submitting feedback: ${liked ? 'liked' : 'disliked'} image ${imageId}`);
+      setFeedback({ ...feedback, [imageId]: liked ? 'liked' : 'disliked' });
 
       const token = authAPI.getToken();
       const response = await fetch('http://localhost:3001/api/agents/feedback', {
@@ -628,7 +624,6 @@ const Home: React.FC = () => {
   };
 
   const handleGenerate = async (e?: React.FormEvent | string) => {
-    // Handle both form submission and voice command string
     if (e && typeof e === 'object' && 'preventDefault' in e) {
       e.preventDefault();
     }
@@ -640,9 +635,6 @@ const Home: React.FC = () => {
       const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
       const userId = currentUser.id;
 
-      console.log('🎨 Starting generation:', { userId, prompt: commandText });
-
-      // Use the REAL generation pipeline (VLT + prompt templates + style profile + RLHF)
       const token = authAPI.getToken();
       const response = await fetch('http://localhost:3001/api/generate/generate', {
         method: 'POST',
@@ -663,7 +655,6 @@ const Home: React.FC = () => {
       }
 
       const result = await response.json();
-      console.log('✅ Generation complete:', result);
 
       if (result.success && result.assets && result.assets.length > 0) {
         const newImages: GeneratedImage[] = result.assets.map((img: any, idx: number) => ({
@@ -682,6 +673,20 @@ const Home: React.FC = () => {
     }
   };
 
+  const handleAutoGenerateToggle = () => {
+    setAutoGenerate(!autoGenerate);
+  };
+
+  const handleCardLike = async (e: React.MouseEvent, imageId: string) => {
+    e.stopPropagation();
+    await handleFeedback(imageId, true);
+  };
+
+  const handleCardDislike = async (e: React.MouseEvent, imageId: string) => {
+    e.stopPropagation();
+    await handleFeedback(imageId, false);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -690,75 +695,21 @@ const Home: React.FC = () => {
     );
   }
 
-  // Handle touch events for swipe navigation in grid
-  const handleTouchStart = (e: React.TouchEvent) => {
-    setTouchStart({ x: e.targetTouches[0].clientX, y: e.targetTouches[0].clientY });
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    setTouchEnd(e.targetTouches[0].clientX);
-  };
-
-  const handleTouchEnd = () => {
-    if (!touchStart.x || !touchEnd) return;
-
-    const distance = touchStart.x - touchEnd;
-    const isLeftSwipe = distance > 50;
-    const isRightSwipe = distance < -50;
-
-    // Only handle horizontal swipes in grid view
-    if (isLeftSwipe || isRightSwipe) {
-      // Prevent default behavior to avoid scrolling
-      if (gridRef.current) {
-        gridRef.current.style.pointerEvents = 'none';
-        setTimeout(() => {
-          if (gridRef.current) {
-            gridRef.current.style.pointerEvents = 'auto';
-          }
-        }, 300);
-      }
-    }
-
-    setTouchStart({ x: 0, y: 0 });
-    setTouchEnd(0);
-  };
-
-  const handleAutoGenerateToggle = () => {
-    setAutoGenerate(!autoGenerate);
-    // TODO: Call API to save preference
-  };
-
-  const handleCardLike = async (e: React.MouseEvent, imageId: string) => {
-    e.stopPropagation();
-    setFeedback({ ...feedback, [imageId]: 'liked' });
-    await handleFeedback(imageId, true);
-  };
-
-  const handleCardDislike = async (e: React.MouseEvent, imageId: string) => {
-    e.stopPropagation();
-    setFeedback({ ...feedback, [imageId]: 'disliked' });
-    await handleFeedback(imageId, false);
-  };
-
   return (
     <div className="min-h-screen bg-white">
-      {/* Control Bar */}
       <header className="sticky top-0 left-0 right-0 z-40 bg-white border-b border-gray-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
-            {/* Left Section */}
             <div className="flex items-baseline gap-3">
               <h1 className="text-2xl sm:text-3xl font-semibold text-gray-900">
                 Your Generations
               </h1>
               <span className="text-sm sm:text-base text-gray-600">
-                {images.length} {images.length === 1 ? 'image' : 'images'}
+                {images.length}
               </span>
             </div>
 
-            {/* Right Section */}
             <div className="flex items-center gap-4 sm:gap-6">
-              {/* Auto-Generate Toggle */}
               <div className="flex items-center gap-3">
                 <div className="flex flex-col gap-1">
                   <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
@@ -779,7 +730,6 @@ const Home: React.FC = () => {
                 </div>
               </div>
 
-              {/* Settings Button */}
               <button
                 onClick={() => setShowSettings(!showSettings)}
                 className="flex items-center gap-2 px-3 sm:px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
@@ -794,7 +744,6 @@ const Home: React.FC = () => {
       </header>
 
       <div className="max-w-7xl mx-auto p-8">
-        {/* Grid View Controls */}
         <div className="mb-6 flex justify-end">
           <div className="flex bg-gray-100 rounded-lg p-1">
             <button
@@ -822,18 +771,13 @@ const Home: React.FC = () => {
           </div>
         </div>
 
-        {/* Images Grid */}
         {images.length > 0 ? (
           <div
-            ref={gridRef}
             className={
               gridView === 'small'
                 ? 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4'
                 : 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8'
             }
-            onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
           >
             {images.map((image, index) => (
               <ImageCard
@@ -849,25 +793,21 @@ const Home: React.FC = () => {
           </div>
         ) : (
           <div className="text-center py-16">
-            <p className="text-gray-400 text-lg">No images yet. Start by generating your first design above.</p>
+            <p className="text-gray-400 text-lg">No images yet. Start generating designs.</p>
           </div>
         )}
 
-        {/* Lightbox Modal - Moved outside the main content flow */}
         {lightboxOpen && (
-          <div className="fixed inset-0 z-50">
-            <ImageLightbox
-              images={images}
-              currentIndex={lightboxIndex}
-              onClose={closeLightbox}
-              onNext={nextImage}
-              onPrevious={previousImage}
-              onFeedback={handleFeedback}
-            />
-          </div>
+          <ImageLightbox
+            images={images}
+            currentIndex={lightboxIndex}
+            onClose={closeLightbox}
+            onNext={nextImage}
+            onPrevious={previousImage}
+            onFeedback={handleFeedback}
+          />
         )}
 
-        {/* Voice Command Bar - with highlighting for suggestions */}
         <CommandBar
           onCommandExecute={handleGenerate}
           highlightSuggestions={shouldHighlightSuggestions}
