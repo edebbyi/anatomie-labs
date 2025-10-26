@@ -14,7 +14,6 @@ import {
 } from 'lucide-react';
 import { agentsAPI } from '../services/agentsAPI';
 import FlipCard from '../components/FlipCard';
-import ControlBar from '../components/ControlBar';
 import Lightbox from '../components/Lightbox';
 import SkeletonLoader from '../components/SkeletonLoader';
 
@@ -247,7 +246,6 @@ const Gallery: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-podna-surface">
-      <ControlBar imageCount={filteredImages.length} />
       <div className="max-w-7xl mx-auto p-4 sm:p-6 md:p-8">
         {/* Header */}
         <div className="mb-8 sm:mb-10 md:mb-12">
@@ -515,7 +513,7 @@ const Gallery: React.FC = () => {
             {filteredImages.map((image, index) => (
               <div
                 key={image.id}
-                className="relative aspect-[3/4] rounded-2xl overflow-hidden shadow-airbnb-card transition-all duration-300 hover:shadow-airbnb-card-hover cursor-pointer group"
+                className="relative aspect-[3/4] rounded-2xl overflow-hidden shadow-airbnb-card transition-all duration-300 hover:shadow-airbnb-card-hover cursor-pointer"
                 onClick={() => setSelectedImageIndex(index)}
               >
                 <FlipCard
@@ -524,19 +522,6 @@ const Gallery: React.FC = () => {
                   timestamp={new Date(image.timestamp)}
                   metadata={image.metadata}
                 />
-                {/* Hover Overlay */}
-                <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-4">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      // TODO: Add to favorites
-                    }}
-                    className="ml-auto text-white text-2xl hover:scale-110 transition-transform"
-                    aria-label="Add to favorites"
-                  >
-                    ♡
-                  </button>
-                </div>
               </div>
             ))}
           </div>

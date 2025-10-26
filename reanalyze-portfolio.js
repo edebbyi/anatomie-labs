@@ -33,7 +33,7 @@ async function reanalyzePortfolio(portfolioId, userId) {
     
     // Step 2: Regenerate style profile from ultra-detailed data
     console.log('\n📊 Step 2: Generating enhanced style profile...');
-    const styleProfile = await trendAnalysisAgent.generateEnhancedStyleProfile(userId, portfolioId);
+    const styleProfile = await trendAnalysisAgent.generateStyleProfile(userId, portfolioId);
     
     console.log('\n✅ Style Profile Generated:');
     console.log(`  - Style Labels: ${styleProfile.style_labels?.length || 0}`);

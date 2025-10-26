@@ -344,7 +344,10 @@ router.get('/profile', authMiddleware, asyncHandler(async (req, res) => {
             fabrics: parseJSON(profile.fabric_distribution),
             silhouettes: parseJSON(profile.silhouette_distribution)
           },
-          styleTags: parseJSON(profile.style_tags),
+          styleTags: Array.isArray(profile.style_tags) ? profile.style_tags : parseJSON(profile.style_tags) || [],
+          aestheticThemes: parseJSON(profile.aesthetic_themes),
+          constructionPatterns: parseJSON(profile.construction_patterns),
+          signaturePieces: parseJSON(profile.signature_pieces),
           updatedAt: profile.updated_at,
           portfolioImages: imagesResult.rows
         },

@@ -6,7 +6,7 @@
  */
 
 const db = require('./database');
-const logger = require('../../utils/logger');
+const logger = require('../utils/logger');
 
 class ImprovedTrendAnalysisAgent {
   /**
@@ -46,6 +46,9 @@ class ImprovedTrendAnalysisAgent {
       colorDist
     });
 
+    // Generate style tags from aesthetic themes
+    const styleTags = aestheticThemes.slice(0, 5).map(theme => theme.name);
+
     // Save to database
     const profile = await this.saveEnhancedProfile(userId, portfolioId, {
       // Existing fields
@@ -53,13 +56,14 @@ class ImprovedTrendAnalysisAgent {
       color_distribution: colorDist,
       fabric_distribution: fabricDist,
       silhouette_distribution: silhouetteDist,
-      
+
       // NEW fields
       aesthetic_themes: aestheticThemes,
       construction_patterns: constructionPatterns,
       signature_pieces: signaturePieces,
       rich_summary: richSummary,
-      
+      style_tags: styleTags,
+
       total_images: descriptors.length,
       avg_confidence: this.calculateAvgConfidence(descriptors),
       avg_completeness: this.calculateAvgCompleteness(descriptors)
@@ -475,11 +479,26 @@ class ImprovedTrendAnalysisAgent {
   }
 
   /**
+   * Get user's style profile
+   */
+  async getStyleProfile(userId) {
+    const query = `
+      SELECT * FROM style_profiles
+      WHERE user_id = $1
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `;
+
+    const result = await db.query(query, [userId]);
+    return result.rows[0] || null;
+  }
+
+  /**
    * Get ultra-detailed descriptors
    */
   async getUltraDetailedDescriptors(portfolioId) {
     const query = `
-      SELECT 
+      SELECT
         d.*,
         pi.url_original as image_url
       FROM ultra_detailed_descriptors d
@@ -528,11 +547,11 @@ class ImprovedTrendAnalysisAgent {
     
     const query = `
       INSERT INTO style_profiles (
-        user_id, 
-        portfolio_id, 
+        user_id,
+        portfolio_id,
         garment_distribution,
-        color_distribution, 
-        fabric_distribution, 
+        color_distribution,
+        fabric_distribution,
         silhouette_distribution,
         aesthetic_themes,
         construction_patterns,
@@ -540,22 +559,24 @@ class ImprovedTrendAnalysisAgent {
         summary_text,
         total_images,
         avg_confidence,
-        avg_completeness
+        avg_completeness,
+        style_tags
       )
       VALUES (
-        $1, 
-        $2, 
-        $3, 
-        $4, 
-        $5, 
-        $6, 
-        $7, 
-        $8, 
-        $9, 
-        $10, 
-        $11, 
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
         $12,
-        $13
+        $13,
+        $14
       )
       ON CONFLICT (user_id) DO UPDATE SET
         portfolio_id = EXCLUDED.portfolio_id,
@@ -570,6 +591,7 @@ class ImprovedTrendAnalysisAgent {
         total_images = EXCLUDED.total_images,
         avg_confidence = EXCLUDED.avg_confidence,
         avg_completeness = EXCLUDED.avg_completeness,
+        style_tags = EXCLUDED.style_tags,
         updated_at = CURRENT_TIMESTAMP
       RETURNING *
     `;
@@ -589,7 +611,8 @@ class ImprovedTrendAnalysisAgent {
         data.rich_summary,
         data.total_images,
         data.avg_confidence,
-        data.avg_completeness
+        data.avg_completeness,
+        data.style_tags || []
       ]);
     } catch (e) {
       // Defensive retry: if any numeric overflow slips through, set fields to NULL
@@ -604,8 +627,8 @@ class ImprovedTrendAnalysisAgent {
         INSERT INTO style_profiles (
           user_id, portfolio_id, garment_distribution, color_distribution, fabric_distribution,
           silhouette_distribution, aesthetic_themes, construction_patterns, signature_pieces,
-          summary_text, total_images, avg_confidence, avg_completeness
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NULL, NULL)
+          summary_text, total_images, avg_confidence, avg_completeness, style_tags
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NULL, NULL, $12)
         ON CONFLICT (user_id) DO UPDATE SET
           portfolio_id = EXCLUDED.portfolio_id,
           garment_distribution = EXCLUDED.garment_distribution,
@@ -619,6 +642,7 @@ class ImprovedTrendAnalysisAgent {
           total_images = EXCLUDED.total_images,
           avg_confidence = NULL,
           avg_completeness = NULL,
+          style_tags = EXCLUDED.style_tags,
           updated_at = CURRENT_TIMESTAMP
         RETURNING *`;
       result = await db.query(fallbackQuery, [
@@ -632,7 +656,8 @@ class ImprovedTrendAnalysisAgent {
         JSON.stringify(data.construction_patterns),
         JSON.stringify(data.signature_pieces),
         data.rich_summary,
-        data.total_images
+        data.total_images,
+        data.style_tags || []
       ]);
     }
 
