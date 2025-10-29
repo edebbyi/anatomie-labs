@@ -362,66 +362,301 @@ class GenerationService {
         settings
       });
 
-      // Get user's style profile for prompt generation
-      const promptTemplateService = require('./promptTemplateService');
+      // Get user's enhanced style profile for prompt generation
+      const IntelligentPromptBuilder = require('./IntelligentPromptBuilder');
       let styleProfile = settings.styleProfile;
-      
+      let brandDNA = null;
+      let interpretation = null;
+
       if (!styleProfile && userId) {
         try {
-          const styleClusteringService = require('./styleClusteringService');
-          const rawProfile = await styleClusteringService.getStyleProfile(userId);
-          
-          if (rawProfile) {
-            styleProfile = {
-              ...rawProfile,
-              clusters: rawProfile.styleClusters || rawProfile.clusters || [],
-              updated_at: rawProfile.updated_at
-            };
-            logger.info('Style profile loaded for query generation', {
+          // Get enhanced style profile with ultra-detailed descriptors
+          styleProfile = await IntelligentPromptBuilder.getEnhancedStyleProfile(userId);
+
+          if (styleProfile) {
+            logger.info('Enhanced style profile loaded for query generation', {
               userId,
-              clusters: styleProfile.clusters?.length || 0
+              totalImages: styleProfile.total_images || 0,
+              aestheticThemes: styleProfile.aesthetic_themes?.length || 0
             });
           }
         } catch (error) {
-          logger.warn('Failed to load style profile for query', {
+          logger.warn('Failed to load enhanced style profile for query', {
             userId,
             error: error.message
           });
         }
       }
 
-      // Extract keywords from query to use as user modifiers
-      const userModifiers = query.split(' ').filter(word => word.length > 3);
+      // Extract brand DNA from style profile
+      if (styleProfile && userId) {
+        try {
+          brandDNA = IntelligentPromptBuilder.extractBrandDNA(styleProfile);
+          logger.info('Brand DNA extracted', {
+            userId,
+            primaryAesthetic: brandDNA?.primaryAesthetic,
+            signatureColors: brandDNA?.signatureColors?.length || 0
+          });
+        } catch (error) {
+          logger.warn('Failed to extract brand DNA', {
+            userId,
+            error: error.message
+          });
+        }
+      }
 
-      // Use promptGeneratorAgent with style profile
-      const promptGeneratorAgent = require('./promptGeneratorAgent');
       let fashionPrompt;
-      
-      if (styleProfile) {
-        // Generate prompt using user's style profile + query keywords
-        fashionPrompt = promptGeneratorAgent.generatePrompt(styleProfile, {
-          index: 0,
-          exploreMode: settings.exploreMode || false,
-          userModifiers
-        });
-        
-        logger.info('Generated prompt from query using style profile', {
-          generationId,
-          userId,
+
+      // STEP 1: Interpret user's natural language prompt using promptEnhancementService
+      // This works even without userId - it will use fallback interpretation
+      const promptEnhancementService = require('./promptEnhancementService');
+
+      try {
+        interpretation = await promptEnhancementService.interpretUserPrompt(
           query,
-          promptPreview: fashionPrompt.mainPrompt.substring(0, 80)
+          brandDNA,
+          { includeEnhancedSuggestion: true }
+        );
+
+        logger.info('Prompt interpreted successfully', {
+          generationId,
+          userId: userId || 'anonymous',
+          garmentType: interpretation.garmentType,
+          specificity: interpretation.specificity,
+          modifierCount: interpretation.userModifiers?.length || 0,
+          recommendedCreativity: interpretation.recommendedCreativity,
+          fallback: interpretation.fallback || false
         });
-      } else {
-        // Fallback: use query as basic prompt without style profile
-        logger.warn('No style profile available, using query as basic prompt', { userId });
-        fashionPrompt = {
-          mainPrompt: `professional fashion photography, ${query}, studio lighting, high quality`,
-          negativePrompt: 'blurry, low quality, pixelated, distorted, bad anatomy',
-          metadata: {
-            source: 'query_fallback',
-            originalQuery: query
+
+        // STEP 2: Generate enhanced prompt using IntelligentPromptBuilder with parsed attributes
+        if (userId) {
+          // With userId: Use full IntelligentPromptBuilder with style profile
+          try {
+            const promptResult = await IntelligentPromptBuilder.generatePrompt(userId, {
+              garmentType: interpretation.garmentType,
+              season: null,
+              occasion: interpretation.occasion,
+              creativity: interpretation.recommendedCreativity || 0.7,
+              useCache: false,
+              variationSeed: Date.now() % 1000,
+              userModifiers: interpretation.userModifiers || [],
+              respectUserIntent: interpretation.specificity === 'high', // Only literal for high specificity
+              parsedUserPrompt: interpretation, // Pass full interpretation
+              brandDNA: brandDNA,
+              enforceBrandDNA: true,
+              brandDNAStrength: interpretation.specificity === 'low' ? 0.9 :
+                               interpretation.specificity === 'medium' ? 0.6 : 0.3
+            });
+
+            if (promptResult && promptResult.positive) {
+              fashionPrompt = {
+                mainPrompt: promptResult.positive,
+                negativePrompt: promptResult.negative,
+                metadata: {
+                  source: 'intelligent_prompt_builder_with_interpretation',
+                  originalQuery: query,
+                  interpretation: {
+                    garmentType: interpretation.garmentType,
+                    specificity: interpretation.specificity,
+                    creativity: interpretation.recommendedCreativity,
+                    brandDNAStrength: interpretation.specificity === 'low' ? 0.9 :
+                                     interpretation.specificity === 'medium' ? 0.6 : 0.3,
+                    fallback: interpretation.fallback || false
+                  },
+                  enhancedSuggestion: interpretation.enhancedSuggestion,
+                  ...promptResult.metadata
+                }
+              };
+
+              logger.info('Generated enhanced prompt from query with style profile', {
+                generationId,
+                userId,
+                query,
+                specificity: interpretation.specificity,
+                brandDNAStrength: fashionPrompt.metadata.interpretation.brandDNAStrength,
+                promptPreview: fashionPrompt.mainPrompt.substring(0, 100)
+              });
+            } else {
+              throw new Error('IntelligentPromptBuilder returned invalid result');
+            }
+          } catch (error) {
+            logger.warn('Failed to use IntelligentPromptBuilder, falling back to basic prompt building', {
+              generationId,
+              userId,
+              error: error.message
+            });
+
+            // Fallback: Build prompt from interpretation without style profile
+            const attributes = [];
+
+            // Add garment type
+            if (interpretation && interpretation.garmentType) {
+              attributes.push(interpretation.garmentType);
+            }
+
+            // Add colors
+            if (interpretation && interpretation.colors && interpretation.colors.length > 0) {
+              attributes.push(...interpretation.colors);
+            }
+
+            // Add style adjectives
+            if (interpretation && interpretation.styleAdjectives && interpretation.styleAdjectives.length > 0) {
+              attributes.push(...interpretation.styleAdjectives);
+            }
+
+            // Add fabrics
+            if (interpretation && interpretation.fabrics && interpretation.fabrics.length > 0) {
+              attributes.push(...interpretation.fabrics);
+            }
+
+            // Build prompt from interpreted attributes
+            const attributeString = attributes.join(', ');
+            const fallbackMainPrompt = `professional fashion photography, ${attributeString}, studio lighting, high quality, detailed, sharp focus`;
+
+            fashionPrompt = {
+              mainPrompt: fallbackMainPrompt,
+              negativePrompt: 'blurry, low quality, pixelated, distorted, bad anatomy, deformed',
+              metadata: {
+                source: 'interpretation_fallback_from_style_profile_error',
+                originalQuery: query,
+                interpretation: interpretation ? {
+                  garmentType: interpretation.garmentType,
+                  specificity: interpretation.specificity,
+                  creativity: interpretation.recommendedCreativity,
+                  fallback: interpretation.fallback || false
+                } : null,
+                enhancedSuggestion: interpretation ? interpretation.enhancedSuggestion : null,
+                styleProfileError: error.message
+              }
+            };
+
+            logger.info('Generated prompt from interpretation (fallback from style profile error)', {
+              generationId,
+              userId,
+              query,
+              specificity: interpretation ? interpretation.specificity : 'unknown',
+              attributeCount: attributes.length,
+              promptPreview: fashionPrompt && fashionPrompt.mainPrompt ? fashionPrompt.mainPrompt.substring(0, Math.min(100, fashionPrompt.mainPrompt.length)) : 'N/A'
+            });
           }
-        };
+        } else {
+          logger.info('No userId, building prompt from interpretation without style profile', {
+            generationId,
+            query
+          });
+          // Without userId: Build prompt from interpretation without style profile
+          const attributes = [];
+
+          // Add garment type
+          if (interpretation && interpretation.garmentType) {
+            attributes.push(interpretation.garmentType);
+          }
+
+          // Add colors
+          if (interpretation && interpretation.colors && interpretation.colors.length > 0) {
+            attributes.push(...interpretation.colors);
+          }
+
+          // Add style adjectives
+          if (interpretation && interpretation.styleAdjectives && interpretation.styleAdjectives.length > 0) {
+            attributes.push(...interpretation.styleAdjectives);
+          }
+
+          // Add fabrics
+          if (interpretation && interpretation.fabrics && interpretation.fabrics.length > 0) {
+            attributes.push(...interpretation.fabrics);
+          }
+
+          // Build prompt from interpreted attributes
+          const attributeString = attributes.join(', ');
+          const noUserMainPrompt = `professional fashion photography, ${attributeString}, studio lighting, high quality, detailed, sharp focus`;
+
+          fashionPrompt = {
+            mainPrompt: noUserMainPrompt,
+            negativePrompt: 'blurry, low quality, pixelated, distorted, bad anatomy, deformed',
+            metadata: {
+              source: 'interpretation_without_style_profile',
+              originalQuery: query,
+              interpretation: interpretation ? {
+                garmentType: interpretation.garmentType,
+                specificity: interpretation.specificity,
+                creativity: interpretation.recommendedCreativity,
+                fallback: interpretation.fallback || false
+              } : null,
+              enhancedSuggestion: interpretation ? interpretation.enhancedSuggestion : null
+            }
+          };
+
+          logger.info('Generated prompt from interpretation without style profile', {
+            generationId,
+            query,
+            specificity: interpretation ? interpretation.specificity : 'unknown',
+            attributeCount: attributes.length,
+            promptPreview: fashionPrompt.mainPrompt ? fashionPrompt.mainPrompt.substring(0, Math.min(100, fashionPrompt.mainPrompt.length)) : 'N/A'
+          });
+        }
+
+      } catch (error) {
+        logger.warn('Failed to interpret prompt, falling back to basic enhancement', {
+          generationId,
+          userId: userId || 'anonymous',
+          error: error.message
+        });
+
+        // Fallback: Use basic keyword extraction
+        const userModifiers = query.split(' ').filter(word => word.length > 3);
+
+        if (userId) {
+          try {
+            const promptResult = await IntelligentPromptBuilder.generatePrompt(userId, {
+              garmentType: null,
+              season: null,
+              occasion: null,
+              creativity: settings.creativity || 0.7,
+              useCache: false,
+              variationSeed: Date.now() % 1000,
+              userModifiers: userModifiers.length > 0 ? userModifiers : undefined,
+              respectUserIntent: true,
+              parsedUserPrompt: { text: query },
+              brandDNA: brandDNA,
+              enforceBrandDNA: false
+            });
+
+            fashionPrompt = {
+              mainPrompt: promptResult.positive,
+              negativePrompt: promptResult.negative,
+              metadata: {
+                source: 'intelligent_prompt_builder_fallback',
+                originalQuery: query,
+                ...promptResult.metadata
+              }
+            };
+          } catch (fallbackError) {
+            logger.error('IntelligentPromptBuilder fallback failed', {
+              error: fallbackError.message
+            });
+            fashionPrompt = {
+              mainPrompt: `professional fashion photography, ${query}, studio lighting, high quality`,
+              negativePrompt: 'blurry, low quality, pixelated, distorted, bad anatomy',
+              metadata: {
+                source: 'basic_fallback',
+                originalQuery: query,
+                error: fallbackError.message
+              }
+            };
+          }
+        } else {
+          // No userId and interpretation failed - use basic prompt
+          fashionPrompt = {
+            mainPrompt: `professional fashion photography, ${query}, studio lighting, high quality`,
+            negativePrompt: 'blurry, low quality, pixelated, distorted, bad anatomy',
+            metadata: {
+              source: 'basic_fallback_no_user',
+              originalQuery: query,
+              error: error.message
+            }
+          };
+        }
       }
 
       await this.updateGenerationStage(generationId, {
@@ -520,6 +755,7 @@ class GenerationService {
 
   /**
    * Generate image from direct prompt (bypass VLT)
+   * FIXED VERSION - Now properly uses IntelligentPromptBuilder with style profile
    * @param {Object} params - Generation parameters
    * @returns {Promise<Object>} Generation result
    */
@@ -536,7 +772,9 @@ class GenerationService {
     logger.info('Starting prompt-based generation', {
       generationId,
       userId,
-      promptLength: prompt.length
+      promptLength: prompt.length,
+      hasCreativity: !!settings.creativity,
+      respectUserIntent: !!settings.respectUserIntent
     });
 
     try {
@@ -549,15 +787,146 @@ class GenerationService {
         skipVlt: true
       });
 
-      // Create mock enhanced prompt structure
-      const enhancedPrompt = {
-        original: { promptText: prompt },
-        enhanced: {
-          mainPrompt: prompt,
-          negativePrompt: negativePrompt || '',
-          keywords: []
+      // FIXED: Instead of creating mock enhanced prompt, use IntelligentPromptBuilder
+      let enhancedPrompt;
+      let finalNegativePrompt = negativePrompt;
+      let promptMetadata = {};
+
+      if (userId && settings.creativity !== undefined) {
+        // Use IntelligentPromptBuilder for style-aware generation
+        try {
+          logger.info('Using IntelligentPromptBuilder for prompt-based generation', {
+            generationId,
+            userId,
+            creativity: settings.creativity
+          });
+
+          // Get enhanced style profile
+          const styleProfile = await promptGenerationService.getEnhancedStyleProfile(userId);
+
+          if (styleProfile) {
+            // Extract brand DNA
+            const brandDNA = promptGenerationService.extractBrandDNA(styleProfile);
+
+            logger.info('Brand DNA extracted for prompt generation', {
+              generationId,
+              hasBrandDNA: !!brandDNA,
+              primaryAesthetic: brandDNA?.primaryAesthetic,
+              confidence: brandDNA?.overallConfidence
+            });
+
+            // Parse user modifiers from the prompt text
+            const userModifiers = this.extractModifiersFromPrompt(prompt);
+
+            // Generate enhanced prompt using IntelligentPromptBuilder
+            const generatedPrompt = await promptGenerationService.generatePrompt(userId, {
+              garmentType: this.detectGarmentType(prompt),
+              season: null,
+              occasion: null,
+              creativity: settings.creativity || 0.5,
+              useCache: true,
+              variationSeed: Date.now() % 1000,
+              userModifiers: userModifiers.length > 0 ? userModifiers : undefined,
+              respectUserIntent: settings.respectUserIntent || false,
+              brandDNA: brandDNA,
+              enforceBrandDNA: settings.creativity < 0.5 // Low creativity = enforce brand DNA
+            });
+
+            enhancedPrompt = {
+              original: { promptText: prompt },
+              enhanced: {
+                mainPrompt: generatedPrompt.positive_prompt,
+                negativePrompt: generatedPrompt.negative_prompt,
+                keywords: []
+              },
+              metadata: generatedPrompt.metadata,
+              brandDNA: brandDNA
+            };
+
+            finalNegativePrompt = generatedPrompt.negative_prompt;
+            promptMetadata = {
+              source: 'intelligent_prompt_builder',
+              usedStyleProfile: true,
+              hasBrandDNA: !!brandDNA,
+              creativity: settings.creativity,
+              respectUserIntent: settings.respectUserIntent,
+              ...generatedPrompt.metadata
+            };
+
+            logger.info('Enhanced prompt generated with IntelligentPromptBuilder', {
+              generationId,
+              userId,
+              promptPreview: generatedPrompt.positive_prompt.substring(0, 80),
+              creativityUsed: settings.creativity,
+              brandConsistency: generatedPrompt.metadata?.brandConsistency
+            });
+
+          } else {
+            logger.warn('No style profile found, using original prompt', {
+              generationId,
+              userId
+            });
+
+            // Fallback to original prompt
+            enhancedPrompt = {
+              original: { promptText: prompt },
+              enhanced: {
+                mainPrompt: prompt,
+                negativePrompt: negativePrompt || '',
+                keywords: []
+              }
+            };
+
+            promptMetadata = {
+              source: 'direct_prompt',
+              usedStyleProfile: false
+            };
+          }
+
+        } catch (error) {
+          logger.error('Failed to use IntelligentPromptBuilder, falling back to original prompt', {
+            generationId,
+            userId,
+            error: error.message
+          });
+
+          // Fallback to original prompt
+          enhancedPrompt = {
+            original: { promptText: prompt },
+            enhanced: {
+              mainPrompt: prompt,
+              negativePrompt: negativePrompt || '',
+              keywords: []
+            }
+          };
+
+          promptMetadata = {
+            source: 'direct_prompt_fallback',
+            error: error.message
+          };
         }
-      };
+
+      } else {
+        // No creativity specified or no userId - use original prompt
+        logger.info('Using original prompt without IntelligentPromptBuilder', {
+          generationId,
+          reason: !userId ? 'no_user_id' : 'no_creativity_setting'
+        });
+
+        enhancedPrompt = {
+          original: { promptText: prompt },
+          enhanced: {
+            mainPrompt: prompt,
+            negativePrompt: negativePrompt || '',
+            keywords: []
+          }
+        };
+
+        promptMetadata = {
+          source: 'direct_prompt',
+          usedStyleProfile: false
+        };
+      }
 
       // Route to model
       const routing = await routingService.routePrompt(enhancedPrompt, {
@@ -566,21 +935,32 @@ class GenerationService {
         forceProvider: settings.provider
       });
 
+      await this.updateGenerationStage(generationId, {
+        stage: 'routing_complete',
+        routing
+      });
+
       // Generate
       const adapter = this.getAdapter(routing.provider.id);
       if (!adapter) {
         throw new Error(`No adapter available for provider: ${routing.provider.id}`);
       }
 
+      const finalMainPrompt = enhancedPrompt.enhanced.mainPrompt;
       const generationResult = await adapter.generate({
-        prompt,
-        negativePrompt,
+        prompt: finalMainPrompt,
+        negativePrompt: finalNegativePrompt,
         settings
       });
 
       if (!generationResult.success) {
         throw new Error(`Generation failed: ${generationResult.error}`);
       }
+
+      await this.updateGenerationStage(generationId, {
+        stage: 'generation_complete',
+        generationResult
+      });
 
       // Upload and store
       const uploadedAssets = await this.uploadAndStoreAssets({
@@ -589,9 +969,9 @@ class GenerationService {
         images: generationResult.images,
         provider: routing.provider,
         routing,
-        mainPrompt: prompt, // Pass the actual prompt text
-        negativePrompt: negativePrompt || null,
-        promptMetadata: { source: 'direct_prompt' }
+        mainPrompt: finalMainPrompt,
+        negativePrompt: finalNegativePrompt,
+        promptMetadata: promptMetadata
       });
 
       // Complete
@@ -600,10 +980,11 @@ class GenerationService {
         assets: uploadedAssets,
         cost: generationResult.cost,
         metadata: {
-          prompt,
-          negativePrompt,
+          prompt: finalMainPrompt,
+          negativePrompt: finalNegativePrompt,
           routing,
-          generationResult
+          generationResult,
+          promptMetadata
         }
       });
 
@@ -618,6 +999,13 @@ class GenerationService {
           });
       }
 
+      logger.info('Prompt-based generation completed', {
+        generationId,
+        userId,
+        assetCount: uploadedAssets.length,
+        usedIntelligentPromptBuilder: promptMetadata.usedStyleProfile
+      });
+
       return completedGeneration;
 
     } catch (error) {
@@ -629,6 +1017,56 @@ class GenerationService {
       await this.failGeneration(generationId, error);
       throw error;
     }
+  }
+
+  /**
+   * Helper: Extract modifiers from prompt text for IntelligentPromptBuilder
+   */
+  extractModifiersFromPrompt(prompt) {
+    const modifiers = [];
+    const promptLower = prompt.toLowerCase();
+
+    // Extract colors
+    const colors = ['black', 'white', 'navy', 'burgundy', 'charcoal', 'beige', 'camel', 'gray', 'grey', 'brown', 'red', 'blue', 'green'];
+    colors.forEach(color => {
+      if (promptLower.includes(color)) modifiers.push(color);
+    });
+
+    // Extract styles
+    const styles = ['casual', 'formal', 'elegant', 'sporty', 'chic', 'minimalist', 'bohemian', 'vintage', 'modern', 'classic'];
+    styles.forEach(style => {
+      if (promptLower.includes(style)) modifiers.push(style);
+    });
+
+    // Extract fabrics
+    const fabrics = ['silk', 'cotton', 'wool', 'cashmere', 'linen', 'denim', 'leather', 'velvet'];
+    fabrics.forEach(fabric => {
+      if (promptLower.includes(fabric)) modifiers.push(fabric);
+    });
+
+    // Extract garment-specific modifiers
+    const garmentModifiers = ['fitted', 'oversized', 'structured', 'flowing', 'tailored', 'relaxed'];
+    garmentModifiers.forEach(modifier => {
+      if (promptLower.includes(modifier)) modifiers.push(modifier);
+    });
+
+    return [...new Set(modifiers)]; // Remove duplicates
+  }
+
+  /**
+   * Helper: Detect garment type from prompt text
+   */
+  detectGarmentType(prompt) {
+    const promptLower = prompt.toLowerCase();
+    const garmentTypes = ['dress', 'blazer', 'jacket', 'coat', 'top', 'shirt', 'blouse', 'skirt', 'pants', 'suit', 'outfit'];
+
+    for (const garment of garmentTypes) {
+      if (promptLower.includes(garment)) {
+        return garment;
+      }
+    }
+
+    return 'outfit'; // Default fallback
   }
 
   /**
@@ -1240,10 +1678,12 @@ class GenerationService {
   }
 
   /**
-   * Helper: Generate unique ID
+   * Helper: Generate unique UUID
    */
   generateId() {
-    return `gen_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    // Generate a proper UUID v4
+    const { v4: uuidv4 } = require('uuid');
+    return uuidv4();
   }
 }
 

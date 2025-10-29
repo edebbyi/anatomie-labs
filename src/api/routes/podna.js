@@ -489,53 +489,97 @@ router.post('/portfolio/:portfolioId/add-images', authMiddleware, upload.single(
 /**
  * POST /api/podna/generate
  * Generate a single image with optional user prompt interpretation
+ * UPDATED: Now properly interprets natural language prompts using promptEnhancementService
  */
 router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
   const userId = req.user.id;
-  const { 
-    prompt, // Add user prompt parameter
-    mode = 'exploratory', 
-    constraints = {}, 
-    provider = 'imagen-4-ultra', 
+  const {
+    prompt, // User's natural language prompt
+    mode = 'exploratory',
+    constraints = {},
+    provider = 'imagen-4-ultra',
     upscale = false,
-    interpret = true // Add interpretation flag
+    interpret = true, // Interpret natural language prompt
+    interpretOptions = {} // Additional interpretation options
   } = req.body;
 
   logger.info('Podna: Generating image', { userId, mode, provider, hasUserPrompt: !!prompt });
 
   try {
     let generationPrompt;
-    
-    // If user provided a prompt, use enhanced interpretation
+    let interpretation = null;
+    let enhancedSuggestion = null;
+
+    // UPDATED: If user provided a prompt, interpret it properly
     if (prompt && interpret) {
-      // Get enhanced style profile
+      // STEP 1: Get enhanced style profile and brand DNA
       const styleProfile = await intelligentPromptBuilder.getEnhancedStyleProfile(userId);
-      
-      // Extract brand DNA
       const brandDNA = styleProfile ? intelligentPromptBuilder.extractBrandDNA(styleProfile) : null;
 
-      logger.info('Generating with user prompt and brand DNA', {
+      logger.info('Interpreting user prompt with brand DNA', {
         userId,
         prompt: prompt.substring(0, 50),
         hasBrandDNA: !!brandDNA
       });
 
-      // Generate enhanced prompt
+      // STEP 2: Interpret user's natural language prompt using promptEnhancementService
+      // THIS IS THE KEY ADDITION!
+      const promptEnhancementService = require('../../services/promptEnhancementService');
+
+      interpretation = await promptEnhancementService.interpretUserPrompt(
+        prompt,
+        brandDNA,
+        interpretOptions
+      );
+
+      logger.info('Prompt interpreted successfully', {
+        userId,
+        garmentType: interpretation.garmentType,
+        specificity: interpretation.specificity,
+        modifierCount: interpretation.userModifiers.length
+      });
+
+      // STEP 3: Generate enhanced prompt using IntelligentPromptBuilder with parsed attributes
       const promptResult = await intelligentPromptBuilder.generatePrompt(userId, {
-        creativity: mode === 'exploratory' ? 0.7 : mode === 'creative' ? 0.5 : 0.3,
+        creativity: interpretation.recommendedCreativity ||
+                   (mode === 'exploratory' ? 0.7 : mode === 'creative' ? 0.5 : 0.3),
         brandDNA,
         enforceBrandDNA: true,
-        brandDNAStrength: 0.8,
-        userPrompt: prompt
+        brandDNAStrength: interpretation.specificity === 'low' ? 0.9 :
+                         interpretation.specificity === 'medium' ? 0.6 : 0.3,
+        parsedUserPrompt: interpretation, // UPDATED: Pass full interpretation
+        userModifiers: interpretation.userModifiers,
+        respectUserIntent: interpretation.specificity === 'high' // Literal for high specificity
       });
-      
+
       generationPrompt = promptResult;
+      enhancedSuggestion = interpretation.enhancedSuggestion;
+
+    } else if (prompt && !interpret) {
+      // User wants to use their prompt literally (no interpretation)
+      logger.info('Using literal user prompt (no interpretation)', { userId, prompt: prompt.substring(0, 50) });
+
+      const styleProfile = await intelligentPromptBuilder.getEnhancedStyleProfile(userId);
+      const brandDNA = styleProfile ? intelligentPromptBuilder.extractBrandDNA(styleProfile) : null;
+
+      const promptResult = await intelligentPromptBuilder.generatePrompt(userId, {
+        creativity: 0.1, // Very literal
+        brandDNA,
+        enforceBrandDNA: false,
+        userModifiers: [prompt], // Use entire prompt as single modifier
+        respectUserIntent: true
+      });
+
+      generationPrompt = promptResult;
+
     } else {
-      // Generate prompt with A/B testing router (existing behavior)
+      // No user prompt - generate from Thompson sampling (existing behavior)
+      logger.info('Generating without user prompt (Thompson sampling)', { userId });
+
       // Add timestamp-based variation seed for diversity
       const variationSeed = Date.now() % 1000;
-      
-      generationPrompt = await promptRouter.generatePrompt(userId, { 
+
+      generationPrompt = await promptRouter.generatePrompt(userId, {
         garmentType: constraints.garment_type,
         season: constraints.season,
         occasion: constraints.occasion,
@@ -545,11 +589,12 @@ router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
       });
     }
 
-    // Generate image with Image Generation Agent
-    const generation = await imageGenerationAgent.generateImage(userId, generationPrompt.id || generationPrompt.prompt_id, { 
-      provider, 
-      upscale 
-    });
+    // STEP 4: Generate image with Image Generation Agent
+    const generation = await imageGenerationAgent.generateImage(
+      userId,
+      generationPrompt.id || generationPrompt.prompt_id,
+      { provider, upscale }
+    );
 
     // Track generation interaction for continuous learning (non-blocking)
     continuousLearningAgent.trackInteraction(userId, generation.id, {
@@ -558,13 +603,15 @@ router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
         promptId: generationPrompt.id || generationPrompt.prompt_id,
         provider,
         mode,
-        hasUserPrompt: !!prompt
+        hasUserPrompt: !!prompt,
+        interpreted: !!interpretation
       }
     }).catch(err => {
       logger.warn('Failed to track generation interaction', { error: err.message });
     });
 
-    res.json({
+    // STEP 5: Build enhanced response with interpretation details
+    const response = {
       success: true,
       message: 'Image generated successfully',
       data: {
@@ -578,11 +625,30 @@ router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
           createdAt: generation.created_at
         }
       }
-    });
+    };
+
+    // UPDATED: Add interpretation details if available (for UI to show "something better")
+    if (interpretation) {
+      response.data.interpretation = {
+        originalPrompt: interpretation.originalPrompt,
+        parsedAttributes: {
+          garmentType: interpretation.garmentType,
+          colors: interpretation.colors,
+          fabrics: interpretation.fabrics,
+          styleAdjectives: interpretation.styleAdjectives,
+          specificity: interpretation.specificity
+        },
+        enhancedSuggestion: interpretation.enhancedSuggestion,
+        brandDNAApplied: !!interpretation.brandDNAAvailable,
+        creativityLevel: interpretation.recommendedCreativity
+      };
+    }
+
+    res.json(response);
 
   } catch (error) {
-    logger.error('Podna: Generation failed', { userId, error: error.message });
-    
+    logger.error('Podna: Generation failed', { userId, error: error.message, stack: error.stack });
+
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to generate image'

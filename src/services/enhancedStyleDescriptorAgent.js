@@ -15,7 +15,7 @@ const ValidationAgent = require('./validationAgent');
 
 // Controlled vocabulary (same as before but with stricter validation)
 const FASHION_ENUMS = {
-  garment_type: ['dress', 'blazer', 'pants', 'skirt', 'coat', 'jacket', 'top', 'blouse', 'shirt', 'sweater', 'cardigan', 'shorts', 'jeans', 'chinos', 'suit', 'jumpsuit', 'romper', 'two-piece', 'co-ord', 'matching set', 'outfit'],
+  garment_type: ['dress', 'blazer', 'pants', 'skirt', 'coat', 'jacket', 'top', 'blouse', 'shirt', 'sweater', 'cardigan', 'shorts', 'jeans', 'chinos', 'suit', 'jumpsuit', 'romper', 'two-piece', 'co-ord', 'matching set'],
   silhouette: ['a-line', 'straight', 'oversized', 'fitted', 'relaxed', 'bodycon', 'empire', 'shift', 'wrap', 'peplum', 'balloon', 'pencil'],
   fit: ['tailored', 'relaxed', 'slim', 'oversized', 'regular', 'loose', 'tight', 'custom'],
   neckline: ['crew', 'v-neck', 'halter', 'boat', 'scoop', 'square', 'sweetheart', 'off-shoulder', 'turtleneck', 'cowl', 'one-shoulder'],
@@ -27,122 +27,6 @@ const FASHION_ENUMS = {
 };
 
 class EnhancedStyleDescriptorAgent {
-  /**
-   * Analyze all images in a portfolio and extract descriptors
-   * @param {string} portfolioId - Portfolio ID
-   * @param {Function} progressCallback - Optional callback for progress updates
-   * @returns {Promise<Object>} Analysis results
-   */
-  async analyzePortfolio(portfolioId, progressCallback = null) {
-    logger.info('Enhanced Style Descriptor Agent: Starting portfolio analysis', { portfolioId });
-
-    // Get portfolio images
-    const images = await this.getPortfolioImages(portfolioId);
-    
-    if (images.length === 0) {
-      throw new Error('No images found in portfolio');
-    }
-
-    const results = {
-      analyzed: 0,
-      failed: 0,
-      descriptors: []
-    };
-
-    // Parallel processing configuration
-    // Higher concurrency = faster but more API load
-    // Default: 5 concurrent requests (good balance)
-    // Can be adjusted via ANALYSIS_CONCURRENCY env var
-    const CONCURRENCY_LIMIT = parseInt(process.env.ANALYSIS_CONCURRENCY || '5', 10);
-    const batches = [];
-    
-    // Split images into batches for parallel processing
-    for (let i = 0; i < images.length; i += CONCURRENCY_LIMIT) {
-      batches.push(images.slice(i, i + CONCURRENCY_LIMIT));
-    }
-
-    logger.info('Enhanced Style Descriptor Agent: Processing in parallel', {
-      totalImages: images.length,
-      batchCount: batches.length,
-      concurrency: CONCURRENCY_LIMIT
-    });
-
-    let processedCount = 0;
-
-    // Process each batch in parallel
-    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-      const batch = batches[batchIndex];
-      
-      // Process all images in this batch simultaneously
-      const batchPromises = batch.map(async (image, indexInBatch) => {
-        const globalIndex = batchIndex * CONCURRENCY_LIMIT + indexInBatch;
-        
-        try {
-          const descriptor = await this.analyzeImage(image);
-          results.descriptors.push(descriptor);
-          results.analyzed++;
-          processedCount++;
-          
-          // Send progress update
-          if (progressCallback) {
-            progressCallback({
-              current: processedCount,
-              total: images.length,
-              percentage: Math.round((processedCount / images.length) * 100),
-              currentImage: image.filename,
-              analyzed: results.analyzed,
-              failed: results.failed
-            });
-          }
-          
-          return { success: true, descriptor };
-        } catch (error) {
-          logger.error('Enhanced Style Descriptor Agent: Failed to analyze image', { 
-            imageId: image.id,
-            filename: image.filename,
-            error: error.message 
-          });
-          results.failed++;
-          processedCount++;
-          
-          // Send progress update even for failures
-          if (progressCallback) {
-            progressCallback({
-              current: processedCount,
-              total: images.length,
-              percentage: Math.round((processedCount / images.length) * 100),
-              currentImage: image.filename,
-              analyzed: results.analyzed,
-              failed: results.failed,
-              error: error.message
-            });
-          }
-          
-          return { success: false, error: error.message };
-        }
-      });
-
-      // Wait for all images in this batch to complete
-      await Promise.all(batchPromises);
-      
-      logger.info('Enhanced Style Descriptor Agent: Batch complete', { 
-        batchIndex: batchIndex + 1,
-        totalBatches: batches.length,
-        processed: processedCount,
-        total: images.length
-      });
-    }
-
-    logger.info('Enhanced Style Descriptor Agent: Completed', { 
-      portfolioId,
-      analyzed: results.analyzed,
-      failed: results.failed,
-      totalTime: 'parallelized'
-    });
-
-    return results;
-  }
-
   /**
    * Analyze single image with anti-hallucination measures
    */
@@ -520,21 +404,6 @@ Return ONLY valid JSON with the updated attributes.`;
 
     const result = await db.query(query, values);
     return result.rows[0];
-  }
-
-  /**
-   * Get portfolio images
-   */
-  async getPortfolioImages(portfolioId) {
-    const query = `
-      SELECT id, user_id, url_original, filename
-      FROM portfolio_images
-      WHERE portfolio_id = $1
-      ORDER BY created_at
-    `;
-
-    const result = await db.query(query, [portfolioId]);
-    return result.rows;
   }
 
   /**

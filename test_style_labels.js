@@ -12,8 +12,14 @@ async function testStyleLabels() {
 
     console.log('Connected to database successfully');
 
-    // Use the specific user ID that has a style profile
-    const userId = '63ac9657-091b-4ffe-909b-8601cfc0e471';
+    // Get a user ID from the database
+    const userResult = await db.query('SELECT id FROM users LIMIT 1');
+    if (userResult.rows.length === 0) {
+      console.error('No users found in database');
+      process.exit(1);
+    }
+
+    const userId = userResult.rows[0].id;
     console.log('Using user ID:', userId);
 
     // Get user's style profile

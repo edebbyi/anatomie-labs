@@ -1,96 +1,60 @@
-const { Client } = require('pg');
-require('dotenv').config();
+/**
+ * Debug script to check numeric values that might cause overflow
+ */
 
-async function debugStyleProfilesTable() {
-  const client = new Client({
-    host: process.env.DB_HOST || 'localhost',
-    port: process.env.DB_PORT || 5432,
-    database: process.env.DB_NAME || 'designer_bff',
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD || ''
-  });
-
+// Function to safely format numeric values for database insertion
+function safeFormatNumeric(value, maxBeforeDecimal, maxAfterDecimal) {
   try {
-    await client.connect();
-    console.log('✅ Connected to database successfully');
-
-    // Check if style_profiles table exists
-    const tableCheck = await client.query(`
-      SELECT EXISTS (
-        SELECT FROM information_schema.tables 
-        WHERE table_name = 'style_profiles'
-      )
-    `);
+    // Convert to float if it's a string
+    let numValue = typeof value === 'string' ? parseFloat(value) : value;
     
-    if (!tableCheck.rows[0].exists) {
-      console.log('❌ style_profiles table does not exist');
-      return;
+    // Handle non-numeric values
+    if (isNaN(numValue) || !isFinite(numValue)) {
+      console.log(`Warning: Non-numeric value encountered: ${value}`);
+      return 0;
     }
     
-    console.log('✅ style_profiles table exists');
+    // Clamp to maximum allowed value
+    const maxValue = Math.pow(10, maxBeforeDecimal) - Math.pow(0.1, maxAfterDecimal);
+    const clampedValue = Math.min(Math.max(numValue, 0), maxValue);
     
-    // Get column information
-    const columns = await client.query(`
-      SELECT column_name, data_type, numeric_precision, numeric_scale, is_nullable
-      FROM information_schema.columns 
-      WHERE table_name = 'style_profiles'
-      ORDER BY ordinal_position
-    `);
+    // Format to required decimal places
+    const formattedValue = parseFloat(clampedValue.toFixed(maxAfterDecimal));
     
-    console.log('\n📋 Columns in style_profiles table:');
-    columns.rows.forEach(col => {
-      let typeInfo = col.data_type;
-      if (col.data_type === 'numeric') {
-        typeInfo = `DECIMAL(${col.numeric_precision},${col.numeric_scale})`;
-      }
-      console.log(`  - ${col.column_name}: ${typeInfo} (${col.is_nullable})`);
-    });
-    
-    // Check for avg_confidence and avg_completeness columns specifically
-    const numericColumns = await client.query(`
-      SELECT column_name, data_type, numeric_precision, numeric_scale
-      FROM information_schema.columns 
-      WHERE table_name = 'style_profiles' 
-      AND column_name IN ('avg_confidence', 'avg_completeness')
-    `);
-    
-    console.log('\n🔢 Numeric column details:');
-    if (numericColumns.rows.length === 0) {
-      console.log('  ❌ Neither avg_confidence nor avg_completeness columns exist');
-    } else {
-      numericColumns.rows.forEach(col => {
-        console.log(`  - ${col.column_name}: DECIMAL(${col.numeric_precision},${col.numeric_scale})`);
-      });
-    }
-    
-    // Check if there are any records in the table
-    const countResult = await client.query('SELECT COUNT(*) as count FROM style_profiles');
-    console.log(`\n📊 Total records in style_profiles: ${countResult.rows[0].count}`);
-    
-    if (parseInt(countResult.rows[0].count) > 0) {
-      // Check for any records with high confidence values
-      try {
-        const highConfidence = await client.query(`
-          SELECT COUNT(*) as count 
-          FROM style_profiles 
-          WHERE avg_confidence >= 1.0
-        `);
-        console.log(`📊 Records with confidence >= 1.0: ${highConfidence.rows[0].count}`);
-      } catch (error) {
-        console.log('⚠️  Could not check confidence values:', error.message);
-      }
-    }
-
+    console.log(`Value: ${value} -> Formatted: ${formattedValue}`);
+    return formattedValue;
   } catch (error) {
-    console.error('❌ Database connection error:', error.message);
-    if (error.code === 'ECONNREFUSED') {
-      console.log('💡 Make sure PostgreSQL is running on your system');
-    } else if (error.code === '28P01') {
-      console.log('💡 Check your database credentials in .env file');
-    }
-  } finally {
-    await client.end();
+    console.log(`Error formatting value ${value}: ${error.message}`);
+    return 0;
   }
 }
 
-debugStyleProfilesTable();
+// Test the function with various inputs
+console.log('Testing numeric formatting function:');
+console.log('====================================');
+
+const testValues = [
+  1.23456789,
+  12.3456789,
+  123.456789,
+  1234.56789,
+  999.999,
+  1000.001,
+  -5.123,
+  'invalid',
+  null,
+  undefined,
+  '123.45',
+  '999.99',
+  '1000.00'
+];
+
+testValues.forEach(value => {
+  console.log(`\nTesting value: ${value} (type: ${typeof value})`);
+  const result1 = safeFormatNumeric(value, 4, 3); // For avg_confidence DECIMAL(4,3)
+  const result2 = safeFormatNumeric(value, 5, 2); // For avg_completeness DECIMAL(5,2)
+  console.log(`  DECIMAL(4,3) result: ${result1}`);
+  console.log(`  DECIMAL(5,2) result: ${result2}`);
+});
+
+console.log('\nFunction test completed.');

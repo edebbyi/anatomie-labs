@@ -10,8 +10,8 @@
  *   node test_migration.js --imageUrl=https://example.com/test-image.jpg
  */
 
-const ultraIngestion = require('./src/services/ultraDetailedIngestionAgent');
-const db = require('./src/services/database');
+const ultraIngestion = require('../src/services/ultraDetailedIngestionAgent');
+const db = require('../src/services/database');
 
 async function runTests() {
   console.log('═══════════════════════════════════════════════════════════');

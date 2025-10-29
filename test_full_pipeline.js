@@ -103,7 +103,7 @@ try {
   
   // Check if required methods exist
   if (typeof continuousLearning.trackInteraction === 'function' && 
-      typeof continuousLearning.getTopStyleTags === 'function') {
+      typeof continuousLearning.getLearningRate === 'function') {
     console.log('✅ PASS: ContinuousLearningAgent methods exist\n');
     passed++;
   } else {
@@ -121,8 +121,8 @@ try {
   const validation = require('./src/services/validationAgent');
   
   // Check if required methods exist
-  if (typeof validation.validateDescriptor === 'function' && 
-      typeof validation.validateColors === 'function') {
+  if (typeof validation.validateStyleDescriptor === 'function' && 
+      typeof validation.detectHallucinations === 'function') {
     console.log('✅ PASS: ValidationAgent methods exist\n');
     passed++;
   } else {

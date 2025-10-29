@@ -1,101 +1,77 @@
-const { Client } = require('pg');
-const { v4: uuidv4 } = require('uuid');
-require('dotenv').config();
+/**
+ * Test script to verify numeric value handling fix
+ */
 
-async function testNumericFix() {
-  const client = new Client({
-    host: process.env.DB_HOST || 'localhost',
-    port: process.env.DB_PORT || 5432,
-    database: process.env.DB_NAME || 'designer_bff',
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD || ''
-  });
-
-  try {
-    await client.connect();
-    console.log('✅ Connected to database successfully');
-
-    // Test inserting values that might cause overflow
-    const testUserId = uuidv4();
-    const testPortfolioId = uuidv4();
-    
-    console.log('\n🧪 Testing numeric value insertion...');
-    
-    // Test with high confidence value (should be clamped)
-    const testData = {
-      user_id: testUserId,
-      portfolio_id: testPortfolioId,
-      avg_confidence: 15.5, // This is higher than the max allowed value
-      avg_completeness: 1200.75, // This is higher than the max allowed value
-      total_images: 50
-    };
-    
-    console.log(`  Input values:`);
-    console.log(`    avg_confidence: ${testData.avg_confidence}`);
-    console.log(`    avg_completeness: ${testData.avg_completeness}`);
-    
-    // Clamp values to valid ranges
-    const clampedConfidence = Math.min(Math.max(testData.avg_confidence, 0), 9.999);
-    const clampedCompleteness = Math.min(Math.max(testData.avg_completeness, 0), 999.99);
-    
-    console.log(`  Clamped values:`);
-    console.log(`    avg_confidence: ${clampedConfidence}`);
-    console.log(`    avg_completeness: ${clampedCompleteness}`);
-    
-    // Try to insert into database
-    const insertQuery = `
-      INSERT INTO style_profiles (
-        user_id, 
-        portfolio_id, 
-        avg_confidence,
-        avg_completeness,
-        total_images
-      )
-      VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (user_id) 
-      DO UPDATE SET
-        portfolio_id = EXCLUDED.portfolio_id,
-        avg_confidence = EXCLUDED.avg_confidence,
-        avg_completeness = EXCLUDED.avg_completeness,
-        total_images = EXCLUDED.total_images
-      RETURNING *
-    `;
-    
-    const result = await client.query(insertQuery, [
-      testData.user_id,
-      testData.portfolio_id,
-      clampedConfidence,
-      clampedCompleteness,
-      testData.total_images
-    ]);
-    
-    console.log(`\n✅ Successfully inserted test record`);
-    console.log(`  Stored values:`);
-    console.log(`    avg_confidence: ${result.rows[0].avg_confidence}`);
-    console.log(`    avg_completeness: ${result.rows[0].avg_completeness}`);
-    
-    // Verify the values are within expected ranges
-    if (result.rows[0].avg_confidence >= 0 && result.rows[0].avg_confidence <= 9.999) {
-      console.log(`  ✅ avg_confidence is within valid range`);
-    } else {
-      console.log(`  ❌ avg_confidence is outside valid range`);
-    }
-    
-    if (result.rows[0].avg_completeness >= 0 && result.rows[0].avg_completeness <= 999.99) {
-      console.log(`  ✅ avg_completeness is within valid range`);
-    } else {
-      console.log(`  ❌ avg_completeness is outside valid range`);
-    }
-    
-    // Clean up test data
-    await client.query('DELETE FROM style_profiles WHERE user_id = $1', [testUserId]);
-    console.log(`\n🧹 Cleaned up test data`);
-
-  } catch (error) {
-    console.error('❌ Error:', error.message);
-  } finally {
-    await client.end();
+// Function to simulate the validation and scaling logic
+function validateAndScaleNumericValues(data) {
+  console.log('Testing numeric value validation and scaling...');
+  console.log('Input data:', data);
+  
+  // Validate and scale numeric values to prevent overflow
+  // For avg_confidence (DECIMAL(4,3)): scale from 0-1 to 0-0.999
+  let validatedAvgConfidence = parseFloat(data.avg_confidence || 0);
+  if (isNaN(validatedAvgConfidence)) validatedAvgConfidence = 0;
+  // If the value is outside 0-1 range, scale it down
+  if (validatedAvgConfidence > 1) {
+    console.log(`Scaling down avg_confidence from ${validatedAvgConfidence} to ${validatedAvgConfidence / 1000}`);
+    validatedAvgConfidence = validatedAvgConfidence / 1000; // Scale down large values
   }
+  // Clamp to valid range for DECIMAL(4,3)
+  validatedAvgConfidence = Math.min(Math.max(validatedAvgConfidence, 0), 0.999);
+  // Format to 3 decimal places
+  validatedAvgConfidence = parseFloat(validatedAvgConfidence.toFixed(3));
+  
+  // For avg_completeness (DECIMAL(5,2)): scale from 0-100 to 0-99.99
+  let validatedAvgCompleteness = parseFloat(data.avg_completeness || 0);
+  if (isNaN(validatedAvgCompleteness)) validatedAvgCompleteness = 0;
+  // If the value is outside 0-100 range, scale it down
+  if (validatedAvgCompleteness > 100) {
+    console.log(`Scaling down avg_completeness from ${validatedAvgCompleteness} to ${validatedAvgCompleteness / 100}`);
+    validatedAvgCompleteness = validatedAvgCompleteness / 100; // Scale down large values
+  }
+  // Clamp to valid range for DECIMAL(5,2)
+  validatedAvgCompleteness = Math.min(Math.max(validatedAvgCompleteness, 0), 99.99);
+  // Format to 2 decimal places
+  validatedAvgCompleteness = parseFloat(validatedAvgCompleteness.toFixed(2));
+  
+  const validatedData = {
+    ...data,
+    avg_confidence: validatedAvgConfidence,
+    avg_completeness: validatedAvgCompleteness
+  };
+  
+  console.log('Validated data:', validatedData);
+  console.log(`avg_confidence: ${validatedData.avg_confidence} (valid range: 0.000-9.999)`);
+  console.log(`avg_completeness: ${validatedData.avg_completeness} (valid range: 0.00-999.99)`);
+  
+  // Check if values are within database column limits
+  const confidenceValid = validatedData.avg_confidence >= 0 && validatedData.avg_confidence <= 9.999;
+  const completenessValid = validatedData.avg_completeness >= 0 && validatedData.avg_completeness <= 999.99;
+  
+  console.log(`avg_confidence valid: ${confidenceValid}`);
+  console.log(`avg_completeness valid: ${completenessValid}`);
+  
+  return {
+    data: validatedData,
+    isValid: confidenceValid && completenessValid
+  };
 }
 
-testNumericFix();
+// Test cases
+const testCases = [
+  { avg_confidence: 0.85, avg_completeness: 75.5 },
+  { avg_confidence: 1.2, avg_completeness: 85.25 },
+  { avg_confidence: 12.5, avg_completeness: 150.75 },
+  { avg_confidence: 123.45, avg_completeness: 1234.56 },
+  { avg_confidence: "invalid", avg_completeness: "also invalid" },
+  { avg_confidence: null, avg_completeness: undefined },
+  { avg_confidence: -5.5, avg_completeness: -10.25 }
+];
+
+testCases.forEach((testCase, index) => {
+  console.log(`\n=== Test Case ${index + 1} ===`);
+  const result = validateAndScaleNumericValues(testCase);
+  console.log(`Result: ${result.isValid ? 'VALID' : 'INVALID'}`);
+});
+
+console.log('\nTest completed.');

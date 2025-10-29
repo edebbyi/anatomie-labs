@@ -142,43 +142,112 @@ class TrendAwareSuggestionEngine {
 
   /**
    * Generate profile-based suggestions
+   * FIXED: Now uses aesthetic_themes instead of just dominantStyles
    */
   generateProfileBasedSuggestions(styleProfile) {
-    if (!styleProfile || !styleProfile.dominantStyles) return [];
+    if (!styleProfile) return [];
 
     const suggestions = [];
-    const topStyles = styleProfile.dominantStyles.slice(0, 2);
 
-    topStyles.forEach((style, index) => {
-      suggestions.push({
-        type: 'profile',
-        priority: 0.85 - (index * 0.1),
-        prompt: `More ${style} pieces - matches your aesthetic`,
-        command: `make me 12 ${style} garments`,
-        reasoning: `Aligns with your ${style} style preference`,
-        metadata: {
-          style,
-          profileMatch: true,
-          confidence: 0.85
-        }
-      });
-    });
+    // FIXED: Use aesthetic_themes if available (richer data)
+    if (styleProfile.aesthetic_themes && styleProfile.aesthetic_themes.length > 0) {
+      const topAesthetics = styleProfile.aesthetic_themes.slice(0, 2);
 
-    // Add garment type preferences
-    if (styleProfile.garmentPreferences) {
-      const topGarment = styleProfile.garmentPreferences[0];
-      suggestions.push({
-        type: 'profile',
-        priority: 0.8,
-        prompt: `Fresh ${topGarment} designs`,
-        command: `make me 15 ${topGarment}`,
-        reasoning: `You frequently work with ${topGarment} designs`,
-        metadata: {
-          garmentType: topGarment,
-          profileMatch: true,
-          confidence: 0.8
-        }
+      topAesthetics.forEach((aesthetic, index) => {
+        const aestheticName = aesthetic.name || aesthetic.aesthetic || aesthetic;
+        const confidence = aesthetic.strength || aesthetic.confidence || 0.85;
+
+        suggestions.push({
+          type: 'profile',
+          priority: confidence - (index * 0.1),
+          prompt: `More ${aestheticName} pieces - matches your aesthetic DNA`,
+          command: `make me 12 ${aestheticName} garments`,
+          reasoning: `Aligns with your ${aestheticName} aesthetic profile (${(confidence * 100).toFixed(0)}% confidence)`,
+          metadata: {
+            aesthetic: aestheticName,
+            profileMatch: true,
+            confidence: confidence,
+            source: 'aesthetic_themes'
+          }
+        });
       });
+    } else if (styleProfile.dominantStyles && styleProfile.dominantStyles.length > 0) {
+      // Fallback to dominantStyles if aesthetic_themes not available
+      const topStyles = styleProfile.dominantStyles.slice(0, 2);
+
+      topStyles.forEach((style, index) => {
+        suggestions.push({
+          type: 'profile',
+          priority: 0.85 - (index * 0.1),
+          prompt: `More ${style} pieces - matches your style`,
+          command: `make me 12 ${style} garments`,
+          reasoning: `Aligns with your ${style} style preference`,
+          metadata: {
+            style,
+            profileMatch: true,
+            confidence: 0.85,
+            source: 'dominant_styles'
+          }
+        });
+      });
+    }
+
+    // FIXED: Use garment_distribution for better suggestions
+    if (styleProfile.garment_distribution) {
+      const garmentDist = typeof styleProfile.garment_distribution === 'string'
+        ? JSON.parse(styleProfile.garment_distribution)
+        : styleProfile.garment_distribution;
+
+      const topGarments = Object.entries(garmentDist)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 2);
+
+      topGarments.forEach(([garment, frequency], index) => {
+        suggestions.push({
+          type: 'profile',
+          priority: 0.8 - (index * 0.05),
+          prompt: `Fresh ${garment} designs`,
+          command: `make me 15 ${garment}`,
+          reasoning: `You frequently work with ${garment} designs (${(frequency * 100).toFixed(0)}% of portfolio)`,
+          metadata: {
+            garmentType: garment,
+            frequency: frequency,
+            profileMatch: true,
+            confidence: 0.8,
+            source: 'garment_distribution'
+          }
+        });
+      });
+    }
+
+    // FIXED: Use fabric_distribution for material-based suggestions
+    if (styleProfile.fabric_distribution) {
+      const fabricDist = typeof styleProfile.fabric_distribution === 'string'
+        ? JSON.parse(styleProfile.fabric_distribution)
+        : styleProfile.fabric_distribution;
+
+      const topFabrics = Object.entries(fabricDist)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 2);
+
+      if (topFabrics.length > 0) {
+        const [topFabric, frequency] = topFabrics[0];
+
+        suggestions.push({
+          type: 'profile',
+          priority: 0.75,
+          prompt: `Explore ${topFabric} designs - your signature material`,
+          command: `make me 10 ${topFabric} pieces`,
+          reasoning: `${topFabric} appears in ${(frequency * 100).toFixed(0)}% of your designs`,
+          metadata: {
+            fabric: topFabric,
+            frequency: frequency,
+            profileMatch: true,
+            confidence: 0.75,
+            source: 'fabric_distribution'
+          }
+        });
+      }
     }
 
     return suggestions;
@@ -425,21 +494,84 @@ class TrendAwareSuggestionEngine {
   }
 
   /**
-   * Get user's style profile
+   * Get user's enhanced style profile with all JSONB fields
+   * FIXED: Now fetches aesthetic_themes, construction_patterns, and other rich data
    */
   async getUserStyleProfile(userId) {
     try {
+      // First try to get from agentService
       const result = await agentService.getStyleProfile(userId);
       if (result.success && result.data) {
-        return result.data.profile_data || result.data;
+        const profile = result.data.profile_data || result.data;
+
+        // If profile has rich data, return it
+        if (profile.aesthetic_themes || profile.construction_patterns) {
+          logger.info('Enhanced style profile loaded for suggestions', {
+            userId,
+            hasAestheticThemes: !!profile.aesthetic_themes,
+            hasConstructionPatterns: !!profile.construction_patterns,
+            hasGarmentDistribution: !!profile.garment_distribution
+          });
+          return profile;
+        }
+
+        // Otherwise fetch directly from database to get JSONB fields
+        const db = require('../utils/database');
+        const dbResult = await db.query(`
+          SELECT
+            user_id,
+            garment_distribution,
+            color_distribution,
+            fabric_distribution,
+            silhouette_distribution,
+            aesthetic_themes,
+            construction_patterns,
+            dominant_styles,
+            avg_confidence,
+            total_images,
+            updated_at
+          FROM style_profiles
+          WHERE user_id = $1
+        `, [userId]);
+
+        if (dbResult.rows.length > 0) {
+          const enrichedProfile = dbResult.rows[0];
+
+          // Parse JSONB fields
+          return {
+            ...enrichedProfile,
+            garment_distribution: this.safeParseJSON(enrichedProfile.garment_distribution, {}),
+            color_distribution: this.safeParseJSON(enrichedProfile.color_distribution, {}),
+            fabric_distribution: this.safeParseJSON(enrichedProfile.fabric_distribution, {}),
+            silhouette_distribution: this.safeParseJSON(enrichedProfile.silhouette_distribution, {}),
+            aesthetic_themes: this.safeParseJSON(enrichedProfile.aesthetic_themes, []),
+            construction_patterns: this.safeParseJSON(enrichedProfile.construction_patterns, []),
+            dominant_styles: this.safeParseJSON(enrichedProfile.dominant_styles, [])
+          };
+        }
       }
+
       return null;
     } catch (error) {
-      logger.warn('Failed to fetch style profile for suggestions', {
+      logger.warn('Failed to fetch enhanced style profile for suggestions', {
         userId,
         error: error.message
       });
       return null;
+    }
+  }
+
+  /**
+   * Helper: Safely parse JSON with fallback
+   */
+  safeParseJSON(str, defaultValue) {
+    if (!str) return defaultValue;
+    if (typeof str === 'object') return str;
+    try {
+      return JSON.parse(str);
+    } catch (error) {
+      logger.warn('Failed to parse JSON', { error: error.message });
+      return defaultValue;
     }
   }
 

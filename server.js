@@ -104,6 +104,13 @@ app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
 
 // API Routes
 app.use('/api/auth', authRoutes);
+// Publicly expose suggestions so the frontend voice bar can fetch suggestions
+// without requiring a token. The handler supports an optional query param
+// `userId` to return personalized suggestions for debugging / demo.
+if (voiceRoutes && voiceRoutes.suggestionsHandler) {
+  app.get('/api/voice/suggestions', voiceRoutes.suggestionsHandler);
+}
+
 app.use('/api/voice', authMiddleware, voiceRoutes);
 app.use('/api/images', authMiddleware, imageRoutes);
 app.use('/api/feedback', authMiddleware, feedbackRoutes);
@@ -181,8 +188,16 @@ const startServer = async () => {
     // Test database connection
     const dbConnected = await db.testConnection();
     if (!dbConnected) {
-      logger.error('Failed to connect to database. Exiting...');
-      process.exit(1);
+      // In development it's helpful to allow the server to start even if
+      // the database isn't available (so frontend work and static hosting
+      // can continue). To override the exit behavior set NODE_ENV=development
+      // or set SKIP_SERVICE_CHECKS=1 in your environment.
+      if (process.env.NODE_ENV === 'development' || process.env.SKIP_SERVICE_CHECKS === '1') {
+        logger.warn('Database connection failed, but continuing because NODE_ENV=development or SKIP_SERVICE_CHECKS=1');
+      } else {
+        logger.error('Failed to connect to database. Exiting...');
+        process.exit(1);
+      }
     }
 
     // Connect to Redis

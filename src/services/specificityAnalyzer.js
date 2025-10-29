@@ -25,27 +25,197 @@ class SpecificityAnalyzer {
       defaultCreativity: parseFloat(process.env.DEFAULT_CREATIVITY_TEMP) || 0.7
     };
 
-    // Keyword dictionaries
+    // EXPANDED: Vague/exploratory keywords
     this.vagueKeywords = [
       'surprise', 'random', 'varied', 'diverse', 'explore', 'discover',
-      'different', 'mix', 'variety', 'some', 'any', 'whatever'
+      'different', 'mix', 'variety', 'some', 'any', 'whatever',
+      'something', 'anything', 'various', 'assorted', 'mixed',
+      'eclectic', 'experimental', 'playful', 'creative', 'unique',
+      'interesting', 'cool', 'nice', 'good', 'beautiful', 'pretty'
     ];
 
+    // EXPANDED: Precise/specific keywords
     this.preciseKeywords = [
       'exactly', 'specifically', 'must have', 'needs to be', 'should be',
-      'precisely', 'definitely', 'only', 'just', 'particular'
+      'precisely', 'definitely', 'only', 'just', 'particular',
+      'strictly', 'exclusively', 'solely', 'requires', 'demands',
+      'insist', 'essential', 'critical', 'exact', 'specific',
+      'particular', 'certain', 'determined', 'fixed', 'set'
     ];
 
+    // MASSIVELY EXPANDED: Technical fabrics and materials (80+ items)
     this.technicalFabrics = [
-      'cashmere', 'merino', 'twill', 'gabardine', 'double-faced',
-      'bias cut', 'pleated', 'darted', 'princess seams', 'french seams',
-      'topstitched', 'raw hem', 'selvage', 'interlined'
+      // Luxury natural fibers
+      'cashmere', 'merino', 'alpaca', 'mohair', 'angora', 'vicuna', 'qiviut',
+      'sea island cotton', 'pima cotton', 'supima', 'egyptian cotton',
+
+      // Technical/performance fabrics
+      'neoprene', 'scuba', 'ponte', 'double knit', 'interlock', 'rib knit',
+      'techno fabric', 'technical fabric', 'performance fabric', 'moisture-wicking',
+      'quick-dry', 'stretch fabric', 'four-way stretch', 'compression fabric',
+
+      // Luxury weaves and constructions
+      'twill', 'gabardine', 'herringbone', 'houndstooth', 'glen plaid', 'prince of wales',
+      'double-faced', 'double cloth', 'bonded fabric', 'laminated',
+
+      // Specialty finishes
+      'boiled wool', 'felted', 'brushed', 'napped', 'sueded', 'peached',
+      'coated', 'waxed', 'oiled', 'treated', 'water-resistant', 'water-repellent',
+
+      // High-end silk types
+      'silk charmeuse', 'silk crepe de chine', 'silk georgette', 'silk satin',
+      'silk taffeta', 'silk organza', 'silk habotai', 'raw silk', 'wild silk',
+
+      // Structured fabrics
+      'brocade', 'jacquard', 'damask', 'matelassé', 'cloqué', 'crêpe',
+      'faille', 'ottoman', 'grosgrain', 'bengaline',
+
+      // Knits
+      'milano', 'pointelle', 'cable knit', 'intarsia', 'fair isle',
+      'aran knit', 'fisherman knit', 'seed stitch', 'moss stitch',
+
+      // Luxury blends
+      'silk blend', 'wool blend', 'cashmere blend', 'linen blend',
+      'cotton-silk', 'wool-cashmere', 'silk-cashmere', 'linen-silk'
     ];
 
+    // MASSIVELY EXPANDED: Construction terms and details (100+ items)
     this.constructionTerms = [
-      'structured', 'unstructured', 'oversized', 'fitted', 'slim fit',
-      'relaxed fit', 'tailored', 'draped', 'gathered', 'ruched',
-      'asymmetric', 'wrap', 'a-line', 'shift', 'empire waist'
+      // Fit and silhouette
+      'structured', 'unstructured', 'semi-structured', 'deconstructed',
+      'oversized', 'fitted', 'slim fit', 'relaxed fit', 'tailored',
+      'draped', 'gathered', 'ruched', 'smocked', 'shirred',
+      'asymmetric', 'wrap', 'a-line', 'shift', 'empire waist',
+      'drop waist', 'natural waist', 'high-waisted', 'mid-rise', 'low-rise',
+      'bodycon', 'form-fitting', 'loose', 'flowing', 'billowing',
+
+      // Seams and construction
+      'bias cut', 'on the bias', 'straight grain', 'cross grain',
+      'princess seams', 'french seams', 'flat-felled seams', 'topstitched',
+      'double-stitched', 'blind stitched', 'slip stitched', 'whip stitched',
+      'overlock', 'serged', 'bound seams', 'piped seams',
+
+      // Pleating and gathering
+      'pleated', 'box pleats', 'knife pleats', 'accordion pleats',
+      'sunray pleats', 'cartridge pleats', 'inverted pleats',
+      'gathered', 'shirred', 'smocked', 'ruched', 'elasticated',
+
+      // Closures
+      'two-way zip', 'two-way zipper', 'exposed zipper', 'concealed zipper',
+      'invisible zipper', 'separating zipper', 'magnetic closure',
+      'snap buttons', 'snap closure', 'hook and eye', 'frog closure',
+      'toggles', 'buttons', 'covered buttons', 'self-covered buttons',
+      'buttonhole', 'bound buttonhole', 'ties', 'lace-up', 'buckle',
+
+      // Lining and interfacing
+      'lined', 'fully lined', 'partially lined', 'unlined', 'raw seams',
+      'interlined', 'interfaced', 'bonded', 'underlined',
+      'self-lined', 'contrast lining', 'silk lining', 'satin lining',
+
+      // Details
+      'quilted', 'padded', 'wadded', 'down-filled', 'insulated',
+      'reversible', 'double-faced', 'double-sided',
+      'darted', 'darts', 'tucks', 'pintucks', 'decorative stitching',
+      'contrast stitching', 'saddle stitching', 'pick stitching',
+      'raw hem', 'rolled hem', 'blind hem', 'lettuce edge',
+      'scalloped edge', 'frayed', 'distressed', 'fringing',
+
+      // Pockets
+      'pockets', 'patch pockets', 'welt pockets', 'besom pockets',
+      'slash pockets', 'in-seam pockets', 'hidden pockets',
+      'kangaroo pocket', 'cargo pockets', 'flap pockets',
+
+      // Collars and necklines
+      'collar', 'stand collar', 'mandarin collar', 'peter pan collar',
+      'notched collar', 'shawl collar', 'revere collar', 'lapels',
+      'hood', 'cowl neck', 'funnel neck', 'turtleneck', 'mock neck',
+
+      // Sleeves and cuffs
+      'set-in sleeves', 'raglan sleeves', 'dolman sleeves', 'batwing',
+      'bell sleeves', 'bishop sleeves', 'puff sleeves', 'leg-of-mutton',
+      'cuffs', 'ribbed cuffs', 'buttoned cuffs', 'barrel cuffs',
+      'french cuffs', 'elastic cuffs', 'adjustable cuffs',
+
+      // Waistbands and fastenings
+      'waistband', 'elastic waistband', 'drawstring', 'tie waist',
+      'belted', 'self-belt', 'contrast belt', 'D-ring belt',
+      'adjustable', 'removable', 'detachable'
+    ];
+
+    // NEW: Style modifiers dictionary (100+ items)
+    this.styleModifiers = [
+      // Jacket styles
+      'moto', 'biker', 'bomber', 'aviator', 'flight', 'varsity', 'letterman',
+      'blazer', 'boyfriend blazer', 'smoking jacket', 'tuxedo jacket',
+      'trench', 'trench coat', 'parka', 'anorak', 'windbreaker',
+      'peacoat', 'duffle', 'car coat', 'safari', 'field jacket', 'utility',
+      'shacket', 'shirt jacket', 'chore coat', 'barn jacket',
+
+      // Coat styles
+      'cocoon', 'wrap coat', 'belted coat', 'robe coat', 'duster',
+      'cape', 'poncho', 'shawl', 'cardigan coat',
+
+      // Dress styles
+      'shift', 'sheath', 'wrap', 'wrap dress', 'shirt dress', 'shirtdress',
+      'maxi', 'midi', 'mini', 'bodycon', 'bandage',
+      'fit and flare', 'a-line', 'empire', 'empire waist',
+      'trapeze', 'swing', 'tent', 'smock',
+      'slip dress', 'cami dress', 'halter', 'strapless',
+
+      // Top styles
+      'tank', 'cami', 'camisole', 'tube top', 'crop top',
+      'peplum', 'basque', 'tunic', 'smock top', 'peasant',
+      'off-shoulder', 'one-shoulder', 'cold shoulder', 'cut-out',
+      'keyhole', 'backless', 'halter', 'racerback',
+
+      // Bottom styles
+      'pencil', 'pencil skirt', 'a-line skirt', 'circle skirt', 'pleated skirt',
+      'high-waisted', 'mid-rise', 'low-rise', 'high-low',
+      'asymmetric', 'wrap skirt', 'sarong',
+
+      // Pants styles
+      'skinny', 'straight leg', 'wide leg', 'palazzo', 'culottes',
+      'cigarette', 'ankle pants', 'cropped', 'capri',
+      'bootcut', 'flare', 'bell bottom', 'sailor pants',
+      'joggers', 'cargo', 'utility pants', 'paperbag',
+
+      // Length modifiers
+      'maxi', 'midi', 'mini', 'knee-length', 'ankle-length',
+      'floor-length', 'tea-length', 'cocktail length',
+      'cropped', 'longline', 'duster length',
+
+      // Sleeve modifiers
+      'sleeveless', 'cap sleeve', 'short sleeve', 'elbow sleeve',
+      '3/4 sleeve', 'bracelet sleeve', 'long sleeve', 'extra long',
+
+      // Neckline modifiers
+      'v-neck', 'scoop neck', 'crew neck', 'boat neck', 'bateau',
+      'square neck', 'sweetheart', 'jewel neck', 'illusion',
+
+      // Fit modifiers
+      'oversized', 'relaxed', 'regular fit', 'tailored fit', 'slim fit',
+      'fitted', 'tight', 'loose', 'boxy', 'slouchy'
+    ];
+
+    // NEW: Pattern and print keywords (50+ items)
+    this.patternKeywords = [
+      // Classic patterns
+      'solid', 'plain', 'monochrome', 'single color',
+      'striped', 'pinstripe', 'chalk stripe', 'bengal stripe',
+      'checked', 'checkered', 'gingham', 'buffalo check', 'tartan', 'plaid',
+      'houndstooth', 'glen plaid', 'prince of wales', 'windowpane',
+      'polka dot', 'dot', 'spotted',
+
+      // Prints and motifs
+      'floral', 'botanical', 'flower print', 'rose print', 'garden print',
+      'animal print', 'leopard', 'zebra', 'snake', 'crocodile', 'python',
+      'geometric', 'abstract', 'graphic', 'digital print',
+      'paisley', 'damask', 'baroque', 'rococo', 'oriental',
+      'tropical', 'palm', 'jungle', 'safari',
+      'nautical', 'maritime', 'anchor', 'rope',
+      'camouflage', 'camo', 'military print',
+      'tie-dye', 'ombre', 'gradient', 'color block',
+      'jacquard', 'intarsia', 'fair isle', 'argyle'
     ];
   }
 

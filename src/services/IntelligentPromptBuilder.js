@@ -45,23 +45,62 @@ class IntelligentPromptBuilder {
    * Generate prompt using ultra-detailed data + Thompson Sampling
    */
   async generatePrompt(userId, options = {}) {
+    const startTime = Date.now();
+
+    // NEW: If parsed user prompt is provided, merge it with options
+    if (options.parsedUserPrompt) {
+      logger.info('Using parsed user prompt', {
+        userId,
+        garmentType: options.parsedUserPrompt.garmentType,
+        specificity: options.parsedUserPrompt.specificity,
+        modifierCount: options.parsedUserPrompt.userModifiers?.length || 0
+      });
+
+      // Override options with parsed prompt attributes
+      if (options.parsedUserPrompt.garmentType && !options.garmentType) {
+        options.garmentType = options.parsedUserPrompt.garmentType;
+      }
+      if (options.parsedUserPrompt.occasion && !options.occasion) {
+        options.occasion = options.parsedUserPrompt.occasion;
+      }
+
+      // Merge user modifiers
+      const mergedModifiers = [
+        ...(options.parsedUserPrompt.userModifiers || []),
+        ...(options.userModifiers || [])
+      ];
+      options.userModifiers = [...new Set(mergedModifiers)]; // Remove duplicates
+
+      // Set respect user intent based on specificity
+      if (options.parsedUserPrompt.specificity === 'high') {
+        options.respectUserIntent = true;
+      } else if (options.parsedUserPrompt.specificity === 'low') {
+        // Low specificity = high creativity, strong brand DNA
+        options.respectUserIntent = false;
+        options.enforceBrandDNA = true;
+      }
+    }
+
+    // Destructure options AFTER modifying them
     const {
       garmentType = null,
       season = null,
       occasion = null,
       creativity = 0.3,
       useCache = true,
-      userModifiers = [],              // ADD THIS
-      respectUserIntent = false        // ADD THIS
+      userModifiers = [],
+      respectUserIntent = false,
+      parsedUserPrompt = null,  // ADDED: Full interpretation from promptEnhancementService
+      brandDNA = null,          // ADDED: Can pass brand DNA directly
+      enforceBrandDNA = false,  // ADDED: Force brand DNA application
+      brandDNAStrength = 0.7    // ADDED: How strongly to apply brand DNA
     } = options;
-
-    const startTime = Date.now();
 
     // Generate cache key
     const cacheKey = this.getCacheKey(userId, garmentType, season, occasion);
 
-    // Check cache
-    if (useCache && this.cache.has(cacheKey)) {
+    // Check cache (skip if using parsed prompt for uniqueness)
+    if (useCache && !parsedUserPrompt && this.cache.has(cacheKey)) {
       this.cacheHits++;
       const cached = this.cache.get(cacheKey);
       logger.info('Prompt cache HIT', { cacheKey, hitRate: this.getCacheHitRate() });
@@ -72,9 +111,9 @@ class IntelligentPromptBuilder {
 
     // Get ultra-detailed descriptors for this user
     const descriptors = await this.getUltraDetailedDescriptors(userId, {
-      garmentType,
+      garmentType: options.garmentType || garmentType,
       season,
-      occasion
+      occasion: options.occasion || occasion
     });
 
     if (!descriptors || descriptors.length === 0) {
@@ -92,8 +131,12 @@ class IntelligentPromptBuilder {
       creativity,
       {
         ...options,
-        userModifiers,              // ADD THIS
-        respectUserIntent       // ADD THIS
+        userModifiers: options.userModifiers || userModifiers,
+        respectUserIntent: options.respectUserIntent !== undefined ? options.respectUserIntent : respectUserIntent,
+        parsedUserPrompt,
+        brandDNA,
+        enforceBrandDNA,
+        brandDNAStrength
       }
     );
 
@@ -113,8 +156,8 @@ class IntelligentPromptBuilder {
       generation_time_ms: Date.now() - startTime
     };
 
-    // Cache the result
-    if (useCache) {
+    // Cache the result (skip if using parsed prompt)
+    if (useCache && !parsedUserPrompt) {
       this.setCache(cacheKey, result);
     }
 
@@ -123,7 +166,8 @@ class IntelligentPromptBuilder {
       promptId: promptRecord.id,
       tokenCount: positive.split(',').length,
       cached: false,
-      timeMs: result.generation_time_ms
+      timeMs: result.generation_time_ms,
+      usedParsedPrompt: !!parsedUserPrompt
     });
 
     return result;
@@ -172,15 +216,43 @@ class IntelligentPromptBuilder {
    */
   async buildDetailedPrompt(descriptors, thompsonParams, creativity, options) {
     const {
-      userModifiers = [],              // ADD THIS
-      respectUserIntent = false        // ADD THIS
+      userModifiers = [],
+      respectUserIntent = false,
+      parsedUserPrompt = null,  // ADDED
+      brandDNA = null,          // ADDED
+      enforceBrandDNA = false,  // ADDED
+      brandDNAStrength = 0.7    // ADDED
     } = options;
+
+    // NEW: If parsed prompt has specific attributes, prioritize them
+    let userSpecifiedColors = [];
+    let userSpecifiedFabrics = [];
+    let userSpecifiedGarment = null;
+
+    if (parsedUserPrompt) {
+      userSpecifiedColors = parsedUserPrompt.colors || [];
+      userSpecifiedFabrics = parsedUserPrompt.fabrics || [];
+      userSpecifiedGarment = parsedUserPrompt.garmentType;
+
+      logger.info('Applying parsed user prompt attributes', {
+        colors: userSpecifiedColors.length,
+        fabrics: userSpecifiedFabrics.length,
+        garment: !!userSpecifiedGarment
+      });
+    }
 
     // Aggregate preferences from descriptors
     const preferences = this.aggregatePreferences(descriptors);
 
-    // Sample attributes using Thompson Sampling
-    const selected = this.thompsonSample(preferences, thompsonParams, creativity);
+    // Sample attributes using Thompson Sampling (with brand DNA bias if enabled)
+    const selected = this.thompsonSample(preferences, thompsonParams, creativity, {
+      brandDNA,
+      enforceBrandDNA,
+      brandDNAStrength,
+      userSpecifiedGarment,
+      userSpecifiedColors,
+      userSpecifiedFabrics
+    });
 
     // Build weighted prompt components in CORRECT ORDER
     const components = [];
@@ -641,35 +713,94 @@ class IntelligentPromptBuilder {
   }
 
   /**
-   * Thompson Sampling selection - UPDATED TO INCLUDE POSE
+   * Thompson Sampling selection - UPDATED TO INCLUDE POSE AND BRAND DNA BIAS
    */
-  thompsonSample(preferences, thompsonParams, creativity) {
+  thompsonSample(preferences, thompsonParams, creativity, options = {}) {
+    const {
+      brandDNA = null,
+      enforceBrandDNA = false,
+      brandDNAStrength = 0.7,
+      userSpecifiedGarment = null,
+      userSpecifiedColors = [],
+      userSpecifiedFabrics = []
+    } = options;
+
     const selected = {};
 
     // Decide: explore or exploit?
     const shouldExplore = Math.random() < creativity;
 
-    // Sample garment
-    selected.garment = this.sampleCategory(
-      preferences.garments,
-      thompsonParams.garments || {},
-      shouldExplore
-    );
+    // NEW: Build brand preference lists for biased sampling
+    const brandGarmentPrefs = brandDNA?.primaryGarments?.map(g => g.type) || [];
+    const brandFabricPrefs = brandDNA?.signatureFabrics?.map(f => f.name) || [];
+    const brandColorPrefs = brandDNA?.signatureColors?.map(c => c.name) || [];
 
-    // Sample fabric
-    selected.fabric = this.sampleCategory(
-      preferences.fabrics,
-      thompsonParams.fabrics || {},
-      shouldExplore
-    );
+    // Sample garment (with brand bias if enforced)
+    if (userSpecifiedGarment) {
+      // User specified a garment - use it directly
+      selected.garment = { type: userSpecifiedGarment };
+      logger.debug('Using user-specified garment', { garment: userSpecifiedGarment });
+    } else if (enforceBrandDNA && brandDNA && brandGarmentPrefs.length > 0) {
+      // Use Thompson sampling with brand bias
+      selected.garment = this.sampleCategoryWithBias(
+        preferences.garments,
+        thompsonParams.garments || {},
+        brandGarmentPrefs,
+        shouldExplore,
+        brandDNAStrength * 2 // Extra boost for garments
+      );
+    } else {
+      // Standard Thompson sampling
+      selected.garment = this.sampleCategory(
+        preferences.garments,
+        thompsonParams.garments || {},
+        shouldExplore
+      );
+    }
 
-    // Sample colors (top 2-3)
-    selected.colors = this.sampleMultiple(
-      preferences.colors,
-      thompsonParams.colors || {},
-      shouldExplore,
-      2
-    );
+    // Sample fabric (with brand bias)
+    if (userSpecifiedFabrics.length > 0) {
+      // User specified fabrics
+      selected.fabric = { material: userSpecifiedFabrics[0] };
+      logger.debug('Using user-specified fabric', { fabric: userSpecifiedFabrics[0] });
+    } else if (enforceBrandDNA && brandDNA && brandFabricPrefs.length > 0) {
+      selected.fabric = this.sampleCategoryWithBias(
+        preferences.fabrics,
+        thompsonParams.fabrics || {},
+        brandFabricPrefs,
+        shouldExplore,
+        brandDNAStrength
+      );
+    } else {
+      selected.fabric = this.sampleCategory(
+        preferences.fabrics,
+        thompsonParams.fabrics || {},
+        shouldExplore
+      );
+    }
+
+    // Sample colors (with brand bias)
+    if (userSpecifiedColors.length > 0) {
+      // User specified colors - use them
+      selected.colors = userSpecifiedColors.map(c => ({ name: c }));
+      logger.debug('Using user-specified colors', { colors: userSpecifiedColors });
+    } else if (enforceBrandDNA && brandDNA && brandColorPrefs.length > 0) {
+      selected.colors = this.sampleMultipleWithBias(
+        preferences.colors,
+        thompsonParams.colors || {},
+        brandColorPrefs,
+        shouldExplore,
+        2,
+        brandDNAStrength
+      );
+    } else {
+      selected.colors = this.sampleMultiple(
+        preferences.colors,
+        thompsonParams.colors || {},
+        shouldExplore,
+        2
+      );
+    }
 
     // Sample construction details (top 3-5)
     selected.construction = this.sampleMultiple(
@@ -786,6 +917,74 @@ class IntelligentPromptBuilder {
 
     const sample = mean + stdDev * z;
     return Math.max(0, Math.min(1, sample));
+  }
+
+  /**
+   * ADDED: Sample category with brand DNA bias
+   * Boosts probability of brand-aligned options
+   */
+  sampleCategoryWithBias(preferenceDict, thompsonDict, brandPreferences, shouldExplore, biasStrength = 0.7) {
+    if (!preferenceDict || Object.keys(preferenceDict).length === 0) {
+      return null;
+    }
+
+    const samples = [];
+    for (const [key, pref] of Object.entries(preferenceDict)) {
+      const params = thompsonDict[key] || { alpha: this.DEFAULT_ALPHA, beta: this.DEFAULT_BETA };
+      let score = this.betaSample(params.alpha, params.beta);
+
+      // Apply brand bias if this option is in brand preferences
+      const isBrandPreferred = brandPreferences.some(bp =>
+        key.toLowerCase().includes(bp.toLowerCase()) || bp.toLowerCase().includes(key.toLowerCase())
+      );
+
+      if (isBrandPreferred) {
+        score = score * (1 + biasStrength); // Boost score
+        logger.debug('Applied brand bias', { key, originalScore: score / (1 + biasStrength), boostedScore: score });
+      }
+
+      if (shouldExplore) {
+        score += Math.random() * 0.3; // Add exploration noise
+      }
+
+      samples.push({ key, score });
+    }
+
+    samples.sort((a, b) => b.score - a.score);
+    return preferenceDict[samples[0].key].data;
+  }
+
+  /**
+   * ADDED: Sample multiple items with brand DNA bias
+   */
+  sampleMultipleWithBias(preferenceDict, thompsonDict, brandPreferences, shouldExplore, n, biasStrength = 0.7) {
+    if (!preferenceDict || Object.keys(preferenceDict).length === 0) {
+      return [];
+    }
+
+    const samples = [];
+    for (const [key, pref] of Object.entries(preferenceDict)) {
+      const params = thompsonDict[key] || { alpha: this.DEFAULT_ALPHA, beta: this.DEFAULT_BETA };
+      let score = this.betaSample(params.alpha, params.beta);
+
+      // Apply brand bias
+      const isBrandPreferred = brandPreferences.some(bp =>
+        key.toLowerCase().includes(bp.toLowerCase()) || bp.toLowerCase().includes(key.toLowerCase())
+      );
+
+      if (isBrandPreferred) {
+        score = score * (1 + biasStrength);
+      }
+
+      if (shouldExplore) {
+        score += Math.random() * 0.3;
+      }
+
+      samples.push({ key, score });
+    }
+
+    samples.sort((a, b) => b.score - a.score);
+    return samples.slice(0, n).map(s => preferenceDict[s.key].data);
   }
 
   /**
@@ -1282,39 +1481,40 @@ class IntelligentPromptBuilder {
    */
   async getEnhancedStyleProfile(userId) {
     try {
-      // Get the style profile with all enrichments
-      const query = `
-        SELECT
-          sp.*,
-          (
-            SELECT json_agg(
-              json_build_object(
-                'image_id', udd.image_id,
-                'description', udd.executive_summary->>'one_sentence_description',
-                'standout_detail', udd.executive_summary->>'standout_detail',
-                'photography', udd.photography,
-                'garment_type', (udd.garments->0->>'type'),
-                'confidence', udd.overall_confidence
-              )
-            )
-            FROM ultra_detailed_descriptors udd
-            WHERE udd.user_id = sp.user_id
-              AND udd.overall_confidence > 0.75
-            ORDER BY udd.overall_confidence DESC
-            LIMIT 10
-          ) as signature_pieces
-        FROM style_profiles sp
-        WHERE sp.user_id = $1
+      // Get the style profile first
+      const profileQuery = `
+        SELECT * FROM style_profiles
+        WHERE user_id = $1
+        ORDER BY updated_at DESC
+        LIMIT 1
       `;
 
-      const result = await db.query(query, [userId]);
+      const profileResult = await db.query(profileQuery, [userId]);
 
-      if (result.rows.length === 0) {
+      if (profileResult.rows.length === 0) {
         logger.warn('No style profile found for user', { userId });
         return null;
       }
 
-      const profile = result.rows[0];
+      const profile = profileResult.rows[0];
+
+      // Get signature pieces separately to avoid GROUP BY issues
+      const signaturePiecesQuery = `
+        SELECT
+          image_id,
+          executive_summary->>'one_sentence_description' as description,
+          executive_summary->>'standout_detail' as standout_detail,
+          photography,
+          (garments->0->>'type') as garment_type,
+          overall_confidence as confidence
+        FROM ultra_detailed_descriptors
+        WHERE user_id = $1
+          AND overall_confidence > 0.75
+        ORDER BY overall_confidence DESC
+        LIMIT 10
+      `;
+
+      const signaturePiecesResult = await db.query(signaturePiecesQuery, [userId]);
 
       // Parse JSON fields
       return {
@@ -1325,7 +1525,7 @@ class IntelligentPromptBuilder {
         silhouette_distribution: this.safeParseJSON(profile.silhouette_distribution, {}),
         aesthetic_themes: this.safeParseJSON(profile.aesthetic_themes, []),
         construction_patterns: this.safeParseJSON(profile.construction_patterns, []),
-        signature_pieces: profile.signature_pieces || []
+        signature_pieces: signaturePiecesResult.rows || []
       };
 
     } catch (error) {

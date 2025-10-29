@@ -514,6 +514,9 @@ const Home: React.FC = () => {
       const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
       const designerId = currentUser.id;
 
+      // Determine the correct localStorage key
+      const storageKey = designerId ? `generatedImages_${designerId}` : 'generatedImages';
+
       if (!designerId) {
         const storedImages = localStorage.getItem('generatedImages');
         if (storedImages) {
@@ -524,42 +527,86 @@ const Home: React.FC = () => {
         return;
       }
 
-      const token = authAPI.getToken();
-      const response = await fetch(`http://localhost:3001/api/podna/gallery`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
+      // Load from localStorage first (for images generated via voice command)
+      let localImages: GeneratedImage[] = [];
+      const storedImages = localStorage.getItem(storageKey);
+      if (storedImages) {
+        try {
+          localImages = JSON.parse(storedImages);
+        } catch (e) {
+          console.error('Error parsing stored images:', e);
         }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch images');
       }
 
-      const result = await response.json();
-
-      if (result.success && result.data && result.data.generations && result.data.generations.length > 0) {
-        const loadedImages: GeneratedImage[] = result.data.generations.map((img: any) => {
-          const timestamp = img.createdAt ? new Date(img.createdAt) : new Date();
-          return {
-            id: img.id || `img-${Date.now()}-${Math.random()}`,
-            url: img.url,
-            prompt: img.promptText || 'AI generated from your style profile',
-            timestamp: timestamp,
-            metadata: img.metadata || {},
-            tags: img.tags || []
-          };
+      // Try to fetch from API
+      try {
+        const token = authAPI.getToken();
+        const response = await fetch(`http://localhost:3001/api/podna/gallery`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
         });
-        setImages(loadedImages);
-        localStorage.setItem(`generatedImages_${designerId}`, JSON.stringify(loadedImages));
-        localStorage.removeItem('generatedImages');
-      } else {
-        setImages([]);
-        localStorage.removeItem(`generatedImages_${designerId}`);
-        localStorage.removeItem('generatedImages');
+
+        if (response.ok) {
+          const result = await response.json();
+
+          if (result.success && result.data && result.data.generations && result.data.generations.length > 0) {
+            const apiImages: GeneratedImage[] = result.data.generations.map((img: any) => {
+              const timestamp = img.createdAt ? new Date(img.createdAt) : new Date();
+              return {
+                id: img.id || `img-${Date.now()}-${Math.random()}`,
+                url: img.url,
+                prompt: img.promptText || 'AI generated from your style profile',
+                timestamp: timestamp,
+                metadata: img.metadata || {},
+                tags: img.tags || []
+              };
+            });
+
+            // Merge local images with API images, removing duplicates by ID
+            const imageMap = new Map<string, GeneratedImage>();
+
+            // Add API images first
+            apiImages.forEach(img => imageMap.set(img.id, img));
+
+            // Add local images (will override API images if same ID, or add new ones)
+            localImages.forEach(img => imageMap.set(img.id, img));
+
+            const mergedImages = Array.from(imageMap.values())
+              .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+            setImages(mergedImages);
+            localStorage.setItem(storageKey, JSON.stringify(mergedImages));
+          } else {
+            // API returned no images, but keep local images
+            setImages(localImages);
+          }
+        } else {
+          // API request failed, use local images
+          console.warn('Failed to fetch from API, using local images');
+          setImages(localImages);
+        }
+      } catch (apiError) {
+        // API error, use local images
+        console.error('Error fetching from API:', apiError);
+        setImages(localImages);
       }
     } catch (error) {
       console.error('Error loading images:', error);
-      setImages([]);
+      // Don't clear images on error, try to load from localStorage
+      const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+      const designerId = currentUser.id;
+      const storageKey = designerId ? `generatedImages_${designerId}` : 'generatedImages';
+      const storedImages = localStorage.getItem(storageKey);
+      if (storedImages) {
+        try {
+          setImages(JSON.parse(storedImages));
+        } catch (e) {
+          setImages([]);
+        }
+      } else {
+        setImages([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -635,6 +682,9 @@ const Home: React.FC = () => {
       const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
       const userId = currentUser.id;
 
+      // Determine the correct localStorage key
+      const storageKey = userId ? `generatedImages_${userId}` : 'generatedImages';
+
       const token = authAPI.getToken();
       const response = await fetch('http://localhost:3001/api/generate/generate', {
         method: 'POST',
@@ -658,15 +708,24 @@ const Home: React.FC = () => {
 
       if (result.success && result.assets && result.assets.length > 0) {
         const newImages: GeneratedImage[] = result.assets.map((img: any, idx: number) => ({
-          id: img.id || `gen-${Date.now()}-${idx}`,
-          url: img.url || img.cdnUrl,
+          id: img.id?.toString() || `gen-${Date.now()}-${idx}`,
+          url: img.url || img.cdnUrl || img.cdn_url, // Support both camelCase and snake_case
           prompt: commandText,
           timestamp: new Date()
         }));
 
         const updated = [...newImages, ...images];
         setImages(updated);
-        localStorage.setItem('generatedImages', JSON.stringify(updated));
+
+        // Save to the correct localStorage key based on whether user is logged in
+        localStorage.setItem(storageKey, JSON.stringify(updated));
+
+        console.log('✅ Generation successful:', {
+          count: newImages.length,
+          command: commandText,
+          storageKey,
+          assets: result.assets
+        });
       }
     } catch (err: any) {
       console.error('❌ Generation failed:', err);

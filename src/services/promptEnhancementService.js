@@ -6,6 +6,8 @@ const logger = require('../utils/logger');
  * Stage 2: Prompt Enhancement Service
  * Enhances VLT specifications using Claude/GPT to generate detailed,
  * professional image generation prompts with rich fashion terminology
+ * 
+ * ADDED: interpretUserPrompt() method for natural language prompt parsing
  */
 class PromptEnhancementService {
   constructor() {
@@ -26,6 +28,333 @@ class PromptEnhancementService {
       logger.warn('No AI provider configured for prompt enhancement');
     }
   }
+
+  /**
+   * ADDED: Interpret user's natural language prompt into structured attributes
+   * This is the KEY method that was missing!
+   * 
+   * @param {string} userPrompt - User's natural language description
+   * @param {Object} brandDNA - User's extracted brand DNA (optional)
+   * @param {Object} options - Interpretation options
+   * @returns {Promise<Object>} Parsed attributes and interpretation
+   */
+  async interpretUserPrompt(userPrompt, brandDNA = null, options = {}) {
+    const {
+      provider = this.defaultProvider,
+      includeEnhancedSuggestion = true
+    } = options;
+
+    try {
+      logger.info('Starting user prompt interpretation', {
+        provider,
+        promptLength: userPrompt.length,
+        hasBrandDNA: !!brandDNA
+      });
+
+      const startTime = Date.now();
+      
+      let result;
+      if (provider === 'claude' && this.anthropic) {
+        result = await this.interpretWithClaude(userPrompt, brandDNA, options);
+      } else if (provider === 'openai' && this.openai) {
+        result = await this.interpretWithGPT(userPrompt, brandDNA, options);
+      } else {
+        throw new Error(`Provider ${provider} not configured`);
+      }
+
+      const duration = Date.now() - startTime;
+      logger.info('Prompt interpretation completed', {
+        provider,
+        duration: `${duration}ms`,
+        specificity: result.specificity
+      });
+
+      return {
+        ...result,
+        metadata: {
+          provider,
+          processingTime: duration,
+          timestamp: new Date().toISOString()
+        }
+      };
+
+    } catch (error) {
+      logger.error('Prompt interpretation failed', {
+        provider,
+        error: error.message,
+        prompt: userPrompt.substring(0, 100)
+      });
+      
+      // Fallback to basic parsing
+      return this.fallbackInterpretation(userPrompt, brandDNA);
+    }
+  }
+
+  /**
+   * ADDED: Interpret using Claude
+   */
+  async interpretWithClaude(userPrompt, brandDNA, options) {
+    const systemPrompt = this.buildInterpretationSystemPrompt(brandDNA);
+    const userMessage = this.buildInterpretationUserPrompt(userPrompt, brandDNA);
+
+    const response = await this.anthropic.messages.create({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 1500,
+      temperature: 0.3, // Lower temperature for more consistent parsing
+      system: systemPrompt,
+      messages: [
+        { role: 'user', content: userMessage }
+      ]
+    });
+
+    const content = response.content[0].text;
+    return this.parseInterpretationResponse(content, userPrompt, brandDNA);
+  }
+
+  /**
+   * ADDED: Interpret using GPT
+   */
+  async interpretWithGPT(userPrompt, brandDNA, options) {
+    const systemPrompt = this.buildInterpretationSystemPrompt(brandDNA);
+    const userMessage = this.buildInterpretationUserPrompt(userPrompt, brandDNA);
+
+    const response = await this.openai.chat.completions.create({
+      model: 'gpt-4-turbo-preview',
+      temperature: 0.3,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage }
+      ]
+    });
+
+    const content = response.choices[0].message.content;
+    return this.parseInterpretationResponse(content, userPrompt, brandDNA);
+  }
+
+  /**
+   * ADDED: Build system prompt for interpretation
+   */
+  buildInterpretationSystemPrompt(brandDNA) {
+    let prompt = `You are an expert fashion design interpreter. Your task is to parse natural language fashion descriptions into structured attributes for AI image generation.
+
+CORE TASK:
+Parse user's prompt into specific fashion attributes:
+- Garment type(s)
+- Colors
+- Fabrics/materials
+- Style adjectives
+- Silhouette/fit
+- Occasion/context
+- Construction details
+- Accessories
+
+SPECIFICITY DETECTION:
+Assess how specific the user's prompt is:
+- HIGH: Very detailed (e.g., "navy wool double-breasted blazer with peak lapels")
+- MEDIUM: Some details (e.g., "elegant black evening gown")
+- LOW: Vague/abstract (e.g., "something elegant", "casual outfit")
+
+IMPORTANT:
+- Extract ONLY what the user explicitly mentioned
+- Don't add assumptions unless necessary
+- Identify missing attributes (user wants creative freedom there)
+- Return in JSON format`;
+
+    if (brandDNA) {
+      prompt += `
+
+BRAND DNA CONTEXT (User's Portfolio Style):
+Primary Aesthetic: ${brandDNA.primaryAesthetic}
+Signature Colors: ${brandDNA.signatureColors.map(c => c.name).join(', ')}
+Signature Fabrics: ${brandDNA.signatureFabrics.map(f => f.name).join(', ')}
+Typical Garments: ${brandDNA.primaryGarments.map(g => g.type).join(', ')}
+
+Use this context to:
+1. Better understand user's aesthetic language
+2. Suggest brand-aligned enhancements
+3. Fill gaps with brand-consistent choices`;
+    }
+
+    return prompt;
+  }
+
+  /**
+   * ADDED: Build user prompt for interpretation
+   */
+  buildInterpretationUserPrompt(userPrompt, brandDNA) {
+    return `Parse this fashion prompt into structured attributes:
+
+USER PROMPT: "${userPrompt}"
+
+Return JSON with this EXACT structure:
+{
+  "garmentType": "string or null",
+  "colors": ["color1", "color2"] or [],
+  "fabrics": ["fabric1", "fabric2"] or [],
+  "styleAdjectives": ["elegant", "casual"] or [],
+  "silhouette": "string or null",
+  "occasion": "string or null",
+  "constructionDetails": ["detail1"] or [],
+  "accessories": ["accessory1"] or [],
+  "specificity": "high|medium|low",
+  "userModifiers": ["term1", "term2"],
+  "missingAttributes": ["color", "fabric"],
+  "enhancedSuggestion": "string (if brand DNA available)"
+}
+
+RULES:
+- "userModifiers": ALL meaningful terms from user's prompt (these will be weighted in final prompt)
+- "missingAttributes": What user DIDN'T specify (opportunities for brand DNA)
+- "specificity": Assess based on detail level
+- "enhancedSuggestion": Only if brand DNA provided - suggest how to enhance with brand style
+- Use null or [] for unspecified attributes
+- Be conservative - don't invent details`;
+  }
+
+  /**
+   * ADDED: Parse LLM interpretation response
+   */
+  parseInterpretationResponse(content, originalPrompt, brandDNA) {
+    try {
+      // Extract JSON from response
+      const jsonMatch = content.match(/```json\n([\s\S]*?)\n```/) || 
+                       content.match(/```\n([\s\S]*?)\n```/) ||
+                       content.match(/\{[\s\S]*\}/);
+      
+      let parsed;
+      if (jsonMatch) {
+        const jsonStr = jsonMatch[1] || jsonMatch[0];
+        parsed = JSON.parse(jsonStr);
+      } else {
+        throw new Error('No JSON found in response');
+      }
+
+      // Validate and normalize
+      const interpretation = {
+        originalPrompt,
+        garmentType: parsed.garmentType || null,
+        colors: Array.isArray(parsed.colors) ? parsed.colors : [],
+        fabrics: Array.isArray(parsed.fabrics) ? parsed.fabrics : [],
+        styleAdjectives: Array.isArray(parsed.styleAdjectives) ? parsed.styleAdjectives : [],
+        silhouette: parsed.silhouette || null,
+        occasion: parsed.occasion || null,
+        constructionDetails: Array.isArray(parsed.constructionDetails) ? parsed.constructionDetails : [],
+        accessories: Array.isArray(parsed.accessories) ? parsed.accessories : [],
+        specificity: parsed.specificity || this.detectSpecificity(originalPrompt),
+        userModifiers: Array.isArray(parsed.userModifiers) ? parsed.userModifiers : [],
+        missingAttributes: Array.isArray(parsed.missingAttributes) ? parsed.missingAttributes : [],
+        enhancedSuggestion: parsed.enhancedSuggestion || null,
+        brandDNAAvailable: !!brandDNA
+      };
+
+      // If no userModifiers extracted, use style adjectives + garment as fallback
+      if (interpretation.userModifiers.length === 0) {
+        interpretation.userModifiers = [
+          ...interpretation.styleAdjectives,
+          interpretation.garmentType
+        ].filter(Boolean);
+      }
+
+      // Determine creativity level based on specificity
+      interpretation.recommendedCreativity = this.calculateCreativityLevel(interpretation.specificity);
+
+      logger.info('Interpretation parsed successfully', {
+        garmentType: interpretation.garmentType,
+        colorCount: interpretation.colors.length,
+        specificity: interpretation.specificity,
+        modifierCount: interpretation.userModifiers.length
+      });
+
+      return interpretation;
+
+    } catch (error) {
+      logger.error('Failed to parse interpretation response', {
+        error: error.message,
+        content: content.substring(0, 500)
+      });
+      
+      return this.fallbackInterpretation(originalPrompt, brandDNA);
+    }
+  }
+
+  /**
+   * ADDED: Detect specificity from prompt length and detail
+   */
+  detectSpecificity(prompt) {
+    const words = prompt.toLowerCase().split(/\s+/);
+    
+    // High specificity indicators
+    const detailWords = ['double-breasted', 'peak', 'notch', 'lapel', 'wool', 
+                        'cotton', 'silk', 'seaming', 'construction', 'detail'];
+    const hasDetailWords = detailWords.some(word => prompt.toLowerCase().includes(word));
+    
+    if (words.length >= 8 || hasDetailWords) {
+      return 'high';
+    } else if (words.length >= 4) {
+      return 'medium';
+    } else {
+      return 'low';
+    }
+  }
+
+  /**
+   * ADDED: Calculate creativity level from specificity
+   */
+  calculateCreativityLevel(specificity) {
+    switch (specificity) {
+      case 'high': return 0.2;   // Very literal - user knows what they want
+      case 'medium': return 0.5; // Balanced interpretation
+      case 'low': return 0.8;    // High creativity - fill gaps with brand DNA
+      default: return 0.5;
+    }
+  }
+
+  /**
+   * ADDED: Fallback interpretation (when LLM fails)
+   */
+  fallbackInterpretation(userPrompt, brandDNA) {
+    logger.warn('Using fallback interpretation');
+
+    // Basic keyword extraction
+    const lowerPrompt = userPrompt.toLowerCase();
+    
+    // Common garment types
+    const garmentTypes = ['blazer', 'dress', 'gown', 'coat', 'jacket', 'pants', 
+                         'skirt', 'shirt', 'blouse', 'sweater', 'cardigan'];
+    const garmentType = garmentTypes.find(g => lowerPrompt.includes(g)) || null;
+    
+    // Common colors
+    const colors = ['black', 'white', 'navy', 'red', 'blue', 'green', 'beige', 
+                   'gray', 'brown', 'cream', 'camel'];
+    const extractedColors = colors.filter(c => lowerPrompt.includes(c));
+    
+    // Common style adjectives
+    const styles = ['elegant', 'casual', 'formal', 'sophisticated', 'modern', 
+                   'classic', 'contemporary', 'minimalist'];
+    const styleAdjectives = styles.filter(s => lowerPrompt.includes(s));
+    
+    return {
+      originalPrompt: userPrompt,
+      garmentType,
+      colors: extractedColors,
+      fabrics: [],
+      styleAdjectives,
+      silhouette: null,
+      occasion: null,
+      constructionDetails: [],
+      accessories: [],
+      specificity: this.detectSpecificity(userPrompt),
+      userModifiers: [...styleAdjectives, garmentType].filter(Boolean),
+      missingAttributes: ['fabric', 'silhouette', 'construction'],
+      enhancedSuggestion: brandDNA ? 
+        `I'll interpret "${userPrompt}" using your brand's signature aesthetic.` : null,
+      brandDNAAvailable: !!brandDNA,
+      recommendedCreativity: 0.5,
+      fallback: true
+    };
+  }
+
+  // ========== EXISTING METHODS BELOW (UNCHANGED) ==========
 
   /**
    * Enhance VLT specification into detailed image generation prompt

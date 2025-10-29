@@ -17,14 +17,13 @@ CREATE TABLE IF NOT EXISTS interaction_events (
   duration_ms INTEGER,               -- Time spent viewing
   scroll_depth DECIMAL(3,2),        -- 0.0 to 1.0
   metadata JSONB,                   -- Additional event data
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  
+  INDEX idx_interaction_user (user_id),
+  INDEX idx_interaction_generation (generation_id),
+  INDEX idx_interaction_type (event_type),
+  INDEX idx_interaction_created (created_at)
 );
-
--- Indexes for interaction_events
-CREATE INDEX IF NOT EXISTS idx_interaction_user ON interaction_events(user_id);
-CREATE INDEX IF NOT EXISTS idx_interaction_generation ON interaction_events(generation_id);
-CREATE INDEX IF NOT EXISTS idx_interaction_type ON interaction_events(event_type);
-CREATE INDEX IF NOT EXISTS idx_interaction_created ON interaction_events(created_at);
 
 -- ===========================================
 -- 2. STYLE TAG METADATA TABLE
@@ -150,7 +149,6 @@ SELECT
   AVG(ie.duration_ms) as avg_view_duration,
   MAX(ie.created_at) as last_interaction
 FROM interaction_events ie
-WHERE EXISTS (SELECT 1 FROM users u WHERE u.id = ie.user_id)
 GROUP BY ie.user_id;
 
 -- View: Style tag performance
@@ -165,7 +163,6 @@ SELECT
   (stm.positive_interactions::decimal / NULLIF(stm.interaction_count, 0)) as positive_rate,
   stm.updated_at
 FROM style_tag_metadata stm
-WHERE EXISTS (SELECT 1 FROM users u WHERE u.id = stm.user_id)
 ORDER BY stm.confidence_score DESC;
 
 -- View: Validation quality metrics
@@ -179,7 +176,6 @@ SELECT
   AVG(vr.color_validation_score) as avg_color_score,
   AVG(vr.logical_consistency_score) as avg_logic_score
 FROM validation_results vr
-WHERE EXISTS (SELECT 1 FROM portfolio_images pi WHERE pi.id = vr.image_id)
 GROUP BY DATE(vr.created_at)
 ORDER BY date DESC;
 
@@ -318,7 +314,7 @@ CREATE INDEX IF NOT EXISTS idx_style_tag_metadata_user_confidence
   ON style_tag_metadata(user_id, confidence_score DESC);
 
 -- JSONB indexes for signature_attributes searches
-CREATE INDEX IF NOT EXISTS idx_style_tag_metadata_signature_attrs_gin
+CREATE INDEX IF NOT EXISTS idx_style_tag_metadata_signature_attrs 
   ON style_tag_metadata USING gin(signature_attributes);
 
 -- ===========================================

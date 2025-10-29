@@ -97,6 +97,7 @@ async function benchmarkCachePerformance(userId) {
   for (let i = 0; i < iterations; i++) {
     const start = Date.now();
     await intelligentPromptBuilder.generatePrompt(userId, {
+      garmentType: 'blazer',
       useCache: true
     });
     const time = Date.now() - start;

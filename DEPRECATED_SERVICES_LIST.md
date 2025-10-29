@@ -5,12 +5,12 @@
 These services are deprecated and can be safely removed from the codebase as they are no longer part of the new system architecture:
 
 ### Prompt-Related Services (Replaced by Intelligent Prompt Builder)
-1. `promptBuilderAgent.js` - Old epsilon-greedy prompt builder *(REMOVED)*
-2. `promptGeneratorAgent.js` - Another old prompt generation system *(REMOVED)*
+1. `promptBuilderAgent.js` - Old epsilon-greedy prompt builder
+2. `promptGeneratorAgent.js` - Another old prompt generation system
 3. `advancedPromptBuilderAgent.js` - Thompson Sampling version (kept temporarily for A/B testing)
 
 ### Style Analysis Services (Replaced by Ultra-Detailed Ingestion)
-4. `styleDescriptorAgent.js` - Original style descriptor agent *(REMOVED)*
+4. `styleDescriptorAgent.js` - Original style descriptor agent
 5. `enhancedStyleDescriptorAgent.js` - Enhanced version (replaced by ultraDetailedIngestionAgent)
 
 ### RLHF Pipeline Services (Integrated into new system)
@@ -19,8 +19,8 @@ These services are deprecated and can be safely removed from the codebase as the
 8. `continuousLearningAgent.js` - Continuous learning (functionality integrated)
 
 ### Other Deprecated Services
-9. `enhancedRlhfPipeline.js` - Empty file *(REMOVED)*
-10. `stage9_filter_update.js` - Stage-specific update file *(REMOVED)*
+9. `enhancedRlhfPipeline.js` - Empty file
+10. `stage9_filter_update.js` - Stage-specific update file
 
 ### Backup Files
 11. `enhancedStyleDescriptorAgent.js.backup` - Backup file

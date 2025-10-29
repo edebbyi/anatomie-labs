@@ -128,7 +128,7 @@ console.log('TEST 7: Testing trend analysis agent...');
 try {
   const trendAnalysis = require('./src/services/trendAnalysisAgent');
   
-  if (typeof trendAnalysis.generateEnhancedStyleProfile === 'function' && 
+  if (typeof trendAnalysis.generateStyleProfile === 'function' && 
       typeof trendAnalysis.getStyleProfile === 'function') {
     console.log('✅ PASS: TrendAnalysisAgent methods exist\n');
     passed++;

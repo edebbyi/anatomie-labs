@@ -434,7 +434,7 @@ class ImageGenerationAgent {
    * Generate batch of images
    */
   async generateBatch(userId, count = 10, options = {}) {
-    const PromptBuilderAgent = options.promptBuilder || require('./IntelligentPromptBuilder');
+    const PromptBuilderAgent = options.promptBuilder || require('./promptBuilderAgent');
     const generations = [];
 
     // Generate varied prompts for each image
