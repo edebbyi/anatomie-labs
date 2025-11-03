@@ -13,7 +13,12 @@ type GalleryHookResult = {
   refresh: () => Promise<void>;
   updateImages: (updater: UpdateFn) => void;
   submitFeedback: (imageId: string, liked: boolean) => Promise<void>;
-  appendGeneratedImages: (rawAssets: any[], prompt: string, generationMethod?: 'generate_endpoint' | 'voice_command') => void;
+  appendGeneratedImages: (
+    rawAssets: any[],
+    prompt: string,
+    generationMethod?: 'generate_endpoint' | 'voice_command',
+    options?: { userQuery?: string; enhancedPrompt?: string }
+  ) => void;
   recordInteraction: (imageId: string) => void;
 };
 
@@ -249,7 +254,12 @@ export const useGalleryData = (): GalleryHookResult => {
   );
 
   const appendGeneratedImages = useCallback(
-    (assets: any[], prompt: string, generationMethod: 'generate_endpoint' | 'voice_command' = 'generate_endpoint') => {
+    (
+      assets: any[],
+      prompt: string,
+      generationMethod: 'generate_endpoint' | 'voice_command' = 'generate_endpoint',
+      options?: { userQuery?: string; enhancedPrompt?: string }
+    ) => {
       const normalized = assets
         .map((asset: any, index) => {
           const promptText =
@@ -273,6 +283,9 @@ export const useGalleryData = (): GalleryHookResult => {
             metadata: {
               ...metadata,
               generationMethod,
+              // Store both user query and enhanced prompt for voice commands
+              userQuery: options?.userQuery,
+              enhancedPrompt: options?.enhancedPrompt,
             },
             tags: Array.isArray(asset.tags) ? asset.tags : undefined,
             origin: asset.origin || 'user',

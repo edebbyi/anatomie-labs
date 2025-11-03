@@ -56,13 +56,18 @@ export function SwipeView({
     });
   })();
 
+  const metadata = (currentImage?.metadata || {}) as Record<string, any>;
+
   const promptText = (() => {
+    // For voice commands, display the user's original query
+    const userQuery = (metadata.userQuery || '').trim();
+    if (userQuery) return userQuery;
+
+    // Otherwise, use the regular prompt
     const raw = (currentImage?.prompt || '').trim();
     if (!raw) return 'Prompt unavailable';
     return raw;
   })();
-
-  const metadata = (currentImage?.metadata || {}) as Record<string, any>;
   const tags =
     Array.isArray(currentImage?.tags) && (currentImage.tags as string[]).length > 0
       ? (currentImage.tags as string[])
@@ -223,12 +228,23 @@ export function SwipeView({
                 <div className="space-y-6">
                   <div>
                     <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">
-                      Prompt
+                      {metadata.userQuery ? 'Your Query' : 'Prompt'}
                     </p>
                     <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-gray-900">
                       {promptText}
                     </p>
                   </div>
+
+                  {metadata.enhancedPrompt && metadata.userQuery && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">
+                        Enhanced Prompt (API)
+                      </p>
+                      <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-gray-600">
+                        {metadata.enhancedPrompt}
+                      </p>
+                    </div>
+                  )}
 
                   <div className="grid gap-4 md:grid-cols-2">
                     {displayData.garment && (

@@ -149,8 +149,13 @@ const Home: React.FC = () => {
           }
 
           const gen = result.data?.generation;
+          const enhancedPrompt = result.data?.parsedCommand?.enhancedPrompt;
+
           if (gen && Array.isArray(gen.assets) && gen.assets.length > 0) {
-            appendGeneratedImages(gen.assets, command, generationMethod);
+            appendGeneratedImages(gen.assets, command, generationMethod, {
+              userQuery: command,
+              enhancedPrompt: enhancedPrompt
+            });
           } else {
             // If backend did not generate immediately, fallback to generic generate with the enhanced prompt
             const enhanced = result.data?.parsedCommand?.enhancedPrompt || command;
@@ -184,7 +189,10 @@ const Home: React.FC = () => {
               throw new Error(genResult.message || 'No assets returned');
             }
 
-            appendGeneratedImages(genResult.assets, enhanced, generationMethod);
+            appendGeneratedImages(genResult.assets, command, generationMethod, {
+              userQuery: command,
+              enhancedPrompt: enhanced
+            });
           }
         })(),
         {

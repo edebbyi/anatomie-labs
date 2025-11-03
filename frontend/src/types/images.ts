@@ -22,6 +22,8 @@ export interface GalleryImage extends BasicImage {
     promptId?: string;
     generationId?: string;
     generationMethod?: 'generate_endpoint' | 'voice_command';
+    userQuery?: string; // What the user said (display to user)
+    enhancedPrompt?: string; // What was sent to the API (used for generation)
     spec?: unknown;
   };
 }
