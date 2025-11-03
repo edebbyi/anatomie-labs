@@ -1,10 +1,10 @@
-import React, { ReactNode, useState, useEffect, useRef } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Home as HomeIcon,
   Sparkles,
   Palette,
-  Image as ImageIcon,
+  Folder,
   Settings as SettingsIcon,
   Menu,
   X,
@@ -14,11 +14,7 @@ import {
 } from 'lucide-react';
 import authAPI from '../services/authAPI';
 
-interface LayoutProps {
-  children: ReactNode;
-}
-
-const Layout: React.FC<LayoutProps> = ({ children }) => {
+const Layout: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
@@ -76,7 +72,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigation = [
     { name: 'Home', path: '/home', icon: HomeIcon },
     { name: 'Generate', path: '/generate', icon: Sparkles },
-    { name: 'Gallery', path: '/gallery', icon: ImageIcon },
+    { name: 'Pods', path: '/pods', icon: Folder },
     { name: 'Style Profile', path: '/style-profile', icon: Palette },
     { name: 'Settings', path: '/settings', icon: SettingsIcon },
   ];
@@ -210,7 +206,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       {/* Main Content */}
       <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 min-h-[calc(100vh-16rem)] animate-fade-in">
         <div className="animate-slide-up">
-          {children}
+          <Outlet />
         </div>
       </main>
 

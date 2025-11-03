@@ -9,11 +9,10 @@ const agentService = require('../../services/agentService');
 // ========== IMPORTS ==========
 const SpecificityAnalyzer = require('../../services/specificityAnalyzer');
 const TrendAwareSuggestionEngine = require('../../services/trendAwareSuggestionEngine');
-const QueryProcessingService = require('../../services/queryProcessingService');
+const queryProcessor = require('../../services/queryProcessingService');
 
 const specificityAnalyzer = new SpecificityAnalyzer();
 const suggestionEngine = new TrendAwareSuggestionEngine();
-const queryProcessor = new QueryProcessingService();
 // =================================
 
 const router = express.Router();
@@ -48,19 +47,21 @@ router.post('/process-text', asyncHandler(async (req, res) => {
     });
   }
 
+  const uid = (req.user && req.user.id) || userId || req.query.userId || 'dev-test';
+
   logger.info('Processing voice text command', {
-    userId: req.user.id,
+    userId: uid,
     command: command.substring(0, 100)
   });
 
   try {
-    const parsedCommand = await parseVoiceCommand(command, userId || req.user.id);
+    const parsedCommand = await parseVoiceCommand(command, uid);
     
         // Generate images based on parsed command
     let generationResult = null;
     if (parsedCommand.quantity > 0) {
       logger.info('Initiating image generation from voice command', {
-        userId: req.user.id,
+        userId: uid,
         command: command.substring(0, 100),
         requestedQuantity: parsedCommand.quantity
       });
@@ -77,7 +78,7 @@ router.post('/process-text', asyncHandler(async (req, res) => {
         prompt: parsedCommand.enhancedPrompt,
         negativePrompt: parsedCommand.negativePrompt,
         ...generationOptions,
-        userId: req.user.id,
+        userId: uid,
         batchMode: true, // Enable batch mode for multiple images
         individualPrompts: true // Generate unique prompt for each image
       });
@@ -101,7 +102,7 @@ router.post('/process-text', asyncHandler(async (req, res) => {
 
   } catch (error) {
     logger.error('Voice command processing failed', {
-      userId: req.user.id,
+      userId: uid,
       command,
       error: error.message
     });
@@ -155,8 +156,10 @@ router.post('/process-audio', upload.single('audio'), asyncHandler(async (req, r
     });
   }
 
+  const uid = (req.user && req.user.id) || req.body.userId || req.query.userId || 'dev-test';
+
   logger.info('Processing voice audio command', {
-    userId: req.user.id,
+    userId: uid,
     fileName: req.file.originalname,
     fileSize: req.file.size,
     mimeType: req.file.mimetype
@@ -167,13 +170,13 @@ router.post('/process-audio', upload.single('audio'), asyncHandler(async (req, r
     const transcribedText = await transcribeAudio(req.file.buffer);
     
     // Parse with specificity analysis
-    const parsedCommand = await parseVoiceCommand(transcribedText, req.user.id);
+    const parsedCommand = await parseVoiceCommand(transcribedText, uid);
     
     // Generate images
     let generationResult = null;
     if (parsedCommand.quantity > 0) {
       logger.info('Initiating image generation from voice audio', {
-        userId: req.user.id,
+        userId: uid,
         quantity: parsedCommand.quantity,
         garmentType: parsedCommand.garmentType,
         usedStyleProfile: parsedCommand.usedStyleProfile,
@@ -183,7 +186,7 @@ router.post('/process-audio', upload.single('audio'), asyncHandler(async (req, r
       
       try {
         generationResult = await generationService.generateFromPrompt({
-          userId: req.user.id,
+          userId: uid,
           prompt: parsedCommand.enhancedPrompt,
           negativePrompt: parsedCommand.negativePrompt,
           settings: {
@@ -212,7 +215,7 @@ router.post('/process-audio', upload.single('audio'), asyncHandler(async (req, r
 
   } catch (error) {
     logger.error('Voice audio processing failed', {
-      userId: req.user.id,
+      userId: uid,
       error: error.message
     });
     throw error;

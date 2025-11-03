@@ -208,13 +208,17 @@ class StableDiffusionAdapter {
 
   /**
    * Calculate cost based on Stable Diffusion 3.5 pricing
+   * @param {Object} params - Generation parameters
+   * @returns {number} Total cost in dollars
    */
   calculateCost(params) {
     // SD 3.5 Large pricing on Replicate (approximate)
     // Base cost: $0.02 per image (very cost-effective)
     const baseCost = 0.02;
     
-    return baseCost * params.num_outputs;
+    // Use num_outputs if available (from sdParams), otherwise default to 1
+    const count = params?.num_outputs || 1;
+    return baseCost * count;
   }
 
   /**

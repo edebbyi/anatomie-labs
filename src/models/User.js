@@ -2,6 +2,28 @@ const db = require('../services/database');
 const bcrypt = require('bcryptjs');
 
 class User {
+  // Cache for column existence check
+  static _hasDeletedAtColumn = null;
+  
+  /**
+   * Check if deleted_at column exists (cached)
+   * @returns {Promise<boolean>}
+   */
+  static async _checkDeletedAtColumn() {
+    if (this._hasDeletedAtColumn !== null) {
+      return this._hasDeletedAtColumn;
+    }
+    
+    const columnCheck = await db.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'users' AND column_name = 'deleted_at'
+    `);
+    
+    this._hasDeletedAtColumn = columnCheck.rows.length > 0;
+    return this._hasDeletedAtColumn;
+  }
+
   /**
    * Create a new user
    * @param {Object} userData - User data
@@ -26,12 +48,21 @@ class User {
    * @returns {Promise<Object|null>} User object or null
    */
   static async findByEmail(email) {
-    const query = `
-      SELECT id, email, password_hash, name, role, created_at, updated_at, 
-             last_login, is_active, email_verified, deleted_at, status
-      FROM users
-      WHERE email = $1 AND is_active = true AND (deleted_at IS NULL OR status != 'deleted')
-    `;
+    // Check if deleted_at column exists (cached)
+    const hasDeletedAt = await this._checkDeletedAtColumn();
+    
+    // Build query based on column existence
+    const selectColumns = hasDeletedAt 
+      ? `id, email, password_hash, name, role, created_at, updated_at, 
+         last_login, is_active, email_verified, deleted_at, status`
+      : `id, email, password_hash, name, role, created_at, updated_at, 
+         last_login, is_active, email_verified`;
+    
+    const whereClause = hasDeletedAt
+      ? `WHERE email = $1 AND is_active = true AND (deleted_at IS NULL OR status != 'deleted')`
+      : `WHERE email = $1 AND is_active = true`;
+    
+    const query = `SELECT ${selectColumns} FROM users ${whereClause}`;
     
     const result = await db.query(query, [email]);
     return result.rows[0] || null;
@@ -43,12 +74,21 @@ class User {
    * @returns {Promise<Object|null>} User object or null
    */
   static async findById(userId) {
-    const query = `
-      SELECT id, email, password_hash, name, role, created_at, updated_at, 
-             last_login, is_active, email_verified, deleted_at, status
-      FROM users
-      WHERE id = $1 AND is_active = true AND (deleted_at IS NULL OR status != 'deleted')
-    `;
+    // Check if deleted_at column exists (cached)
+    const hasDeletedAt = await this._checkDeletedAtColumn();
+    
+    // Build query based on column existence
+    const selectColumns = hasDeletedAt 
+      ? `id, email, password_hash, name, role, created_at, updated_at, 
+         last_login, is_active, email_verified, deleted_at, status`
+      : `id, email, password_hash, name, role, created_at, updated_at, 
+         last_login, is_active, email_verified`;
+    
+    const whereClause = hasDeletedAt
+      ? `WHERE id = $1 AND is_active = true AND (deleted_at IS NULL OR status != 'deleted')`
+      : `WHERE id = $1 AND is_active = true`;
+    
+    const query = `SELECT ${selectColumns} FROM users ${whereClause}`;
     
     const result = await db.query(query, [userId]);
     return result.rows[0] || null;
@@ -60,14 +100,27 @@ class User {
    * @returns {Promise<Object|null>} User with profile or null
    */
   static async findWithProfile(userId) {
+    // Check if deleted_at column exists (cached)
+    const hasDeletedAt = await this._checkDeletedAtColumn();
+    
+    // Build query based on column existence
+    const selectColumns = hasDeletedAt
+      ? `u.id, u.email, u.name, u.role, u.created_at, u.updated_at, 
+         u.last_login, u.is_active, u.email_verified, u.deleted_at, u.status`
+      : `u.id, u.email, u.name, u.role, u.created_at, u.updated_at, 
+         u.last_login, u.is_active, u.email_verified`;
+    
+    const whereClause = hasDeletedAt
+      ? `WHERE u.id = $1 AND u.is_active = true AND (u.deleted_at IS NULL OR u.status != 'deleted')`
+      : `WHERE u.id = $1 AND u.is_active = true`;
+    
     const query = `
       SELECT 
-        u.id, u.email, u.name, u.role, u.created_at, u.updated_at, 
-        u.last_login, u.is_active, u.email_verified, u.deleted_at, u.status,
+        ${selectColumns},
         p.style_preference, p.favorite_colors, p.preferred_fabrics
       FROM users u
       LEFT JOIN user_profiles p ON u.id = p.user_id
-      WHERE u.id = $1 AND u.is_active = true AND (u.deleted_at IS NULL OR u.status != 'deleted')
+      ${whereClause}
     `;
     
     const result = await db.query(query, [userId]);

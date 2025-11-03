@@ -291,10 +291,10 @@ class PromptGenerationService {
 
     const angleVariations = [
       'front view, straight on',
-      '3/4 angle view',
-      'slight side angle',
-      'dynamic pose angle'
-    ];
+      '3/4 front angle view',
+      'straight-on front view',
+      'front-facing position'
+    ]; // All front-facing views only
 
     for (let i = 1; i < count; i++) {
       const variantOptions = {

@@ -140,7 +140,7 @@ class ImagenAdapter {
           promptLength: prompt.length,
           hasNegativePrompt: !!negativePrompt
         },
-        cost: this.calculateCost(imagenParams),
+        cost: this.calculateCost(imagenParams, requestedCount),
         timestamp: new Date().toISOString()
       };
 
@@ -221,8 +221,11 @@ class ImagenAdapter {
 
   /**
    * Calculate cost based on Imagen 4 Ultra pricing via Replicate
+   * @param {Object} params - Generation parameters (imagenParams)
+   * @param {number} count - Number of images generated
+   * @returns {number} Total cost in dollars
    */
-  calculateCost(params) {
+  calculateCost(params, count = 1) {
     // Imagen 4 Ultra pricing on Replicate (approximate)
     // Base cost: $0.04 per image
     // Higher quality increases cost slightly
@@ -230,7 +233,7 @@ class ImagenAdapter {
     const baseCost = 0.04;
     const qualityMultiplier = params.output_quality >= 90 ? 1.2 : 1.0;
     
-    return baseCost * qualityMultiplier * params.number_of_images;
+    return baseCost * qualityMultiplier * count;
   }
 
   /**

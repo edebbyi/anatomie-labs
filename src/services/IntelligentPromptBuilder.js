@@ -6,10 +6,12 @@
  * 2. Learns shot types from portfolio analysis
  * 3. Ensures front-facing poses by default
  * 4. Includes model/pose information in prompts
+ * 5. Includes model gender weighting based on designer preferences
  */
 
 const db = require('./database');
 const logger = require('../utils/logger');
+const modelGenderService = require('./modelGenderDetectionService');
 
 class IntelligentPromptBuilder {
   constructor() {
@@ -126,6 +128,7 @@ class IntelligentPromptBuilder {
 
     // Build prompt using Thompson Sampling + ultra-detailed data
     const { positive, negative, metadata } = await this.buildDetailedPrompt(
+      userId,
       descriptors,
       thompsonParams,
       creativity,
@@ -212,16 +215,17 @@ class IntelligentPromptBuilder {
 
   /**
    * Build detailed prompt using Thompson Sampling
-   * ORDER: Style → Garment → Color → Model/Pose → Accessories → Lighting → Camera
+   * ORDER: Style → Garment → Color → Model/Pose → Model Gender → Accessories → Lighting → Camera
    */
-  async buildDetailedPrompt(descriptors, thompsonParams, creativity, options) {
+  async buildDetailedPrompt(userId, descriptors, thompsonParams, creativity, options) {
     const {
       userModifiers = [],
       respectUserIntent = false,
       parsedUserPrompt = null,  // ADDED
       brandDNA = null,          // ADDED
       enforceBrandDNA = false,  // ADDED
-      brandDNAStrength = 0.7    // ADDED
+      brandDNAStrength = 0.7,   // ADDED
+      generationIndex = 0       // ADDED: For model gender alternation
     } = options;
 
     // NEW: If parsed prompt has specific attributes, prioritize them
@@ -330,6 +334,34 @@ class IntelligentPromptBuilder {
       components.push(this.formatToken('front-facing pose', 1.2));
     }
 
+    // 5.5 MODEL GENDER (NEW - AUTO-INSERTED BASED ON DESIGNER PREFERENCE)
+    try {
+      const modelGenderElement = await modelGenderService.getModelGenderPromptElement(
+        userId,
+        generationIndex,
+        true  // Track for alternation
+      );
+
+      if (modelGenderElement && modelGenderElement.promptElement) {
+        // High weight for model gender to ensure consistency with designer's portfolio
+        components.push(this.formatToken(modelGenderElement.promptElement, 1.3));
+        
+        logger.info('Added model gender to prompt', {
+          userId,
+          gender: modelGenderElement.gender,
+          setting: modelGenderElement.setting,
+          confidence: modelGenderElement.confidence
+        });
+      }
+    } catch (error) {
+      logger.warn('Failed to add model gender element to prompt', {
+        userId,
+        error: error.message
+      });
+      // Fallback: add default female model
+      components.push(this.formatToken('[stunning female model]', 1.3));
+    }
+
     // 6. ACCESSORIES (if any)
     if (selected.accessories && selected.accessories.length > 0) {
       for (const accessory of selected.accessories.slice(0, 2)) {
@@ -348,15 +380,20 @@ class IntelligentPromptBuilder {
       components.push(this.formatToken('soft lighting from front', 1.1));
     }
 
-    // 8. CAMERA SPECS (medium weight)
+    // 8. CAMERA SPECS (medium weight) - ADAPTED TO SHOT TYPE
     if (selected.photography) {
-      // Camera angle - ALWAYS PREFER FRONT ANGLES
+      // Camera angle - ALWAYS PREFER FRONT ANGLES, adapted to shot type
       let angle = selected.photography.angle || '3/4 front angle';
 
       // Override side/back angles to front
       if (angle.includes('side') || angle.includes('back') || angle.includes('profile')) {
         angle = '3/4 front angle';
         logger.info('Overriding non-front angle to 3/4 front', { originalAngle: selected.photography.angle });
+      }
+
+      // ADAPT: If full-body shot, prefer full-body front view
+      if (selected.pose?.shot_type?.includes('full-body')) {
+        angle = 'full-body front view';
       }
 
       components.push(this.formatToken(angle, 1.2));
@@ -372,8 +409,12 @@ class IntelligentPromptBuilder {
         components.push(this.formatToken('clean studio background', 1.0));
       }
     } else {
-      // DEFAULT camera settings - ALWAYS FRONT-FACING
-      components.push(this.formatToken('3/4 front angle', 1.2));
+      // DEFAULT camera settings - ALWAYS FRONT-FACING, WITH SHOT TYPE VARIETY
+      const defaultAngle = selected.pose?.shot_type?.includes('full-body')
+        ? 'full-body front view'
+        : '3/4 front angle';
+      
+      components.push(this.formatToken(defaultAngle, 1.2));
       components.push(this.formatToken('at eye level', 1.0));
       components.push(this.formatToken('clean studio background', 1.0));
     }
@@ -468,7 +509,9 @@ class IntelligentPromptBuilder {
       camera_angle: selected.photography?.angle || '3/4 front angle',
       pose_enforced_front_facing: !selected.pose || selected.pose.body_position?.includes('front'),
       user_modifiers: userModifiers,              // ADD THIS
-      respect_user_intent: respectUserIntent      // ADD THIS
+      respect_user_intent: respectUserIntent,     // ADD THIS
+      model_gender_applied: true,                 // ADD THIS: Track that model gender was applied
+      generation_index: generationIndex            // ADD THIS: For batch tracking
     };
 
     return {
@@ -604,13 +647,16 @@ class IntelligentPromptBuilder {
       // NEW: Aggregate photography settings
       if (photography) {
         const photoKey = this.generatePhotographyKey(photography);
+        // VALIDATION: Ensure angle is front-facing before storing
+        const validatedAngle = this.ensureFrontAngle(photography.camera_angle?.horizontal || '3/4 front angle');
+        
         if (!preferences.photography[photoKey]) {
           preferences.photography[photoKey] = {
             count: 0,
             data: {
               lighting: photography.lighting?.type || 'soft lighting',
               lighting_direction: photography.lighting?.direction || 'front',
-              angle: this.ensureFrontAngle(photography.camera_angle?.horizontal || '3/4 front angle'),
+              angle: validatedAngle,
               height: photography.camera_angle?.vertical || 'eye level',
               background: photography.background?.type || 'minimal'
             }
@@ -1358,20 +1404,39 @@ class IntelligentPromptBuilder {
 
   /**
    * Helper: Extract shot type preferences from style profile
+   * INCLUDES: Full-body, three-quarter, and other shot types from portfolio
    */
   extractShotTypePreferences(styleProfile) {
     // Look in ultra-detailed descriptors for photography data
     const descriptors = styleProfile.signature_pieces || [];
     const shotTypeCounts = {};
 
+    // Normalize shot types to include both three-quarter and full-body variants
+    const normalizedShotTypes = {
+      'full-body': ['full body', 'full length', 'full shot', 'full figure'],
+      'three-quarter': ['three-quarter', '3/4', 'waist up', 'mid-length'],
+      'close-up': ['close-up', 'headshot', 'face', 'bust shot'],
+      'medium': ['medium shot', 'medium']
+    };
+
     descriptors.forEach(desc => {
-      const shotType = desc.photography?.shot_composition?.type;
+      let shotType = desc.photography?.shot_composition?.type;
       if (shotType) {
-        shotTypeCounts[shotType] = (shotTypeCounts[shotType] || 0) + 1;
+        // Normalize the shot type
+        const normalized = this.normalizeShotType(shotType, normalizedShotTypes);
+        shotTypeCounts[normalized] = (shotTypeCounts[normalized] || 0) + 1;
       }
     });
 
     const total = Object.values(shotTypeCounts).reduce((sum, count) => sum + count, 0);
+
+    // If no shot types found, return default variety (front-facing)
+    if (total === 0) {
+      return [
+        { type: 'full-body shot', frequency: 0.5 },
+        { type: 'three-quarter length shot', frequency: 0.5 }
+      ];
+    }
 
     return Object.entries(shotTypeCounts)
       .map(([type, count]) => ({
@@ -1379,7 +1444,25 @@ class IntelligentPromptBuilder {
         frequency: count / total
       }))
       .sort((a, b) => b.frequency - a.frequency)
-      .slice(0, 3);
+      .slice(0, 5); // Allow up to 5 shot type variations
+  }
+
+  /**
+   * Helper: Normalize shot type to canonical forms
+   */
+  normalizeShotType(shotType, mapping) {
+    const lower = shotType.toLowerCase();
+    
+    for (const [canonical, variants] of Object.entries(mapping)) {
+      if (variants.some(v => lower.includes(v))) {
+        return canonical === 'full-body' ? 'full-body shot' :
+               canonical === 'three-quarter' ? 'three-quarter length shot' :
+               canonical === 'close-up' ? 'close-up shot' :
+               'medium shot';
+      }
+    }
+    
+    return 'three-quarter length shot'; // Safe default
   }
 
   /**
@@ -1409,14 +1492,17 @@ class IntelligentPromptBuilder {
 
   /**
    * Helper: Extract camera angle preferences
+   * ENFORCES: Only front-facing angles are included in brand DNA
    */
   extractAnglePreferences(styleProfile) {
     const descriptors = styleProfile.signature_pieces || [];
     const angleCounts = {};
 
     descriptors.forEach(desc => {
-      const angle = desc.photography?.camera_angle?.horizontal;
+      let angle = desc.photography?.camera_angle?.horizontal;
       if (angle) {
+        // VALIDATION: Filter and convert to front-facing only
+        angle = this.ensureFrontAngle(angle);
         angleCounts[angle] = (angleCounts[angle] || 0) + 1;
       }
     });
@@ -1425,7 +1511,7 @@ class IntelligentPromptBuilder {
 
     return Object.entries(angleCounts)
       .map(([angle, count]) => ({
-        angle,
+        angle: this.ensureFrontAngle(angle), // Double-check all angles are front-facing
         frequency: count / total
       }))
       .sort((a, b) => b.frequency - a.frequency)

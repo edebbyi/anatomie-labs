@@ -1,16 +1,17 @@
 import { X, Heart, Info, Grid, Rows } from 'lucide-react';
-import { useState } from 'react';
-import { GeneratedImage } from '../lib/mockData';
+import { useEffect, useState } from 'react';
+import { BasicImage } from './ImageCard';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 
 interface SwipeViewProps {
-  images: GeneratedImage[];
+  images: BasicImage[];
   initialIndex: number;
   onClose: () => void;
   onLike: (id: string) => void;
   onDiscard: (id: string) => void;
+  onImageViewed?: (id: string) => void;
 }
 
 export function SwipeView({
@@ -19,6 +20,7 @@ export function SwipeView({
   onClose,
   onLike,
   onDiscard,
+  onImageViewed,
 }: SwipeViewProps) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [showMetadata, setShowMetadata] = useState(false);
@@ -26,6 +28,62 @@ export function SwipeView({
   const [mode, setMode] = useState<'card' | 'vertical'>('card');
 
   const currentImage = images[currentIndex];
+
+  const resolveGeneratedAt = (image?: BasicImage) => {
+    if (!image) return undefined;
+    const source =
+      image.timestamp ||
+      (image as any).createdAt ||
+      (image as any).created_at ||
+      (image as any)?.metadata?.generatedAt ||
+      (image as any)?.metadata?.generated_at;
+
+    const parsed =
+      source instanceof Date ? source : source ? new Date(source) : undefined;
+
+    return parsed && !Number.isNaN(parsed.getTime()) ? parsed : undefined;
+  };
+
+  const generatedLabel = (() => {
+    const date = resolveGeneratedAt(currentImage);
+    if (!date) return 'Unknown';
+    return date.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  })();
+
+  const promptText = (() => {
+    const raw = (currentImage?.prompt || '').trim();
+    if (!raw) return 'Prompt unavailable';
+    return raw;
+  })();
+
+  const metadata = (currentImage?.metadata || {}) as Record<string, any>;
+  const tags =
+    Array.isArray(currentImage?.tags) && (currentImage.tags as string[]).length > 0
+      ? (currentImage.tags as string[])
+      : Array.isArray(metadata.styleTags)
+        ? (metadata.styleTags as string[])
+        : [];
+
+  const displayData = {
+    garment: metadata.garmentType || metadata.garment,
+    colors: Array.isArray(metadata.colors) ? metadata.colors : [],
+    fabric: metadata.fabric || metadata.texture,
+    silhouette: metadata.silhouette || metadata.silhouette_type,
+    details: metadata.details,
+    shot: metadata.shot || metadata.lighting,
+  };
+
+  useEffect(() => {
+    if (currentImage) {
+      onImageViewed?.(currentImage.id);
+    }
+  }, [currentImage, onImageViewed]);
 
   const handleSwipe = (dir: number) => {
     setDirection(dir);
@@ -51,9 +109,10 @@ export function SwipeView({
     if (e.key === 'Escape') onClose();
   };
 
-  useState(() => {
-    window.addEventListener('keydown', handleKeyDown as any);
-    return () => window.removeEventListener('keydown', handleKeyDown as any);
+  useEffect(() => {
+    const listener = handleKeyDown as unknown as EventListener;
+    window.addEventListener('keydown', listener);
+    return () => window.removeEventListener('keydown', listener);
   });
 
   if (mode === 'vertical') {
@@ -151,8 +210,8 @@ export function SwipeView({
                   className="w-full h-auto max-h-[70vh] object-contain"
                 />
                 <div className="p-4 flex flex-wrap gap-2">
-                  {currentImage.tags.map((tag, i) => (
-                    <Badge key={i} variant="secondary">
+                  {tags.map((tag, i) => (
+                    <Badge key={`${tag}-${i}`} variant="secondary">
                       {tag}
                     </Badge>
                   ))}
@@ -161,46 +220,75 @@ export function SwipeView({
             ) : (
               // Back of card - Metadata
               <div className="bg-white rounded-2xl overflow-hidden shadow-2xl p-6 min-h-[500px]">
-                <div className="space-y-4">
+                <div className="space-y-6">
                   <div>
-                    <p className="text-sm text-gray-500">Garment</p>
-                    <p className="text-gray-900">{currentImage.metadata.garment}</p>
+                    <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">
+                      Prompt
+                    </p>
+                    <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-gray-900">
+                      {promptText}
+                    </p>
                   </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Colors</p>
-                    <p className="text-gray-900">{currentImage.metadata.colors.join(', ')}</p>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {displayData.garment && (
+                      <div>
+                        <p className="text-sm text-gray-500">Garment</p>
+                        <p className="text-gray-900">{displayData.garment}</p>
+                      </div>
+                    )}
+                    {displayData.colors.length > 0 && (
+                      <div>
+                        <p className="text-sm text-gray-500">Colors</p>
+                        <p className="text-gray-900">
+                          {displayData.colors.join(', ')}
+                        </p>
+                      </div>
+                    )}
+                    {displayData.fabric && (
+                      <div>
+                        <p className="text-sm text-gray-500">Fabric</p>
+                        <p className="text-gray-900">{displayData.fabric}</p>
+                      </div>
+                    )}
+                    {displayData.silhouette && (
+                      <div>
+                        <p className="text-sm text-gray-500">Silhouette</p>
+                        <p className="text-gray-900">{displayData.silhouette}</p>
+                      </div>
+                    )}
+                    {displayData.details && (
+                      <div className="md:col-span-2">
+                        <p className="text-sm text-gray-500">Details</p>
+                        <p className="text-gray-900">{displayData.details}</p>
+                      </div>
+                    )}
+                    {displayData.shot && (
+                      <div>
+                        <p className="text-sm text-gray-500">Shot</p>
+                        <p className="text-gray-900">{displayData.shot}</p>
+                      </div>
+                    )}
                   </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Fabric</p>
-                    <p className="text-gray-900">{currentImage.metadata.fabric}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Silhouette</p>
-                    <p className="text-gray-900">{currentImage.metadata.silhouette}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Details</p>
-                    <p className="text-gray-900">{currentImage.metadata.details}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Shot</p>
-                    <p className="text-gray-900">{currentImage.metadata.shot}</p>
-                  </div>
+
                   <div>
                     <p className="text-sm text-gray-500">Tags</p>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {currentImage.tags.map((tag, i) => (
-                        <Badge key={i} variant="secondary">
-                          {tag}
-                        </Badge>
-                      ))}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {tags.length > 0 ? (
+                        tags.map((tag, idx) => (
+                          <Badge key={`${tag}-${idx}`} variant="secondary">
+                            {tag}
+                          </Badge>
+                        ))
+                      ) : (
+                        <span className="text-sm text-gray-400">No tags</span>
+                      )}
                     </div>
                   </div>
+
                   <div>
                     <p className="text-sm text-gray-500">Generated</p>
-                    <p className="text-gray-900">
-                      {new Date(currentImage.created_at).toLocaleString()}
-                    </p>
+                    <p className="text-gray-900">{generatedLabel}</p>
                   </div>
                 </div>
               </div>

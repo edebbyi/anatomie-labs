@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Eye, Download, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { API_URL } from '../config/env';
 
 interface PortfolioImage {
   id: string;
@@ -47,7 +48,6 @@ const PortfolioModal: React.FC<PortfolioModalProps> = ({ isOpen, onClose }) => {
         }
       }
       
-      const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
       const response = await fetch(`${API_URL}/persona/portfolio/${userId}`);
       
       if (response.ok) {
@@ -95,7 +95,6 @@ const PortfolioModal: React.FC<PortfolioModalProps> = ({ isOpen, onClose }) => {
   const handleDelete = async (image: PortfolioImage) => {
     if (window.confirm('Are you sure you want to remove this image from your portfolio?')) {
       try {
-        const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
         const response = await fetch(`${API_URL}/persona/portfolio/${image.id}`, {
           method: 'DELETE',
         });

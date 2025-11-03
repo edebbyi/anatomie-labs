@@ -612,7 +612,7 @@ class ImprovedTrendAnalysisAgent {
         data.total_images,
         data.avg_confidence,
         data.avg_completeness,
-        data.style_tags || []
+        JSON.stringify(data.style_tags || [])
       ]);
     } catch (e) {
       // Defensive retry: if any numeric overflow slips through, set fields to NULL
@@ -657,7 +657,7 @@ class ImprovedTrendAnalysisAgent {
         JSON.stringify(data.signature_pieces),
         data.rich_summary,
         data.total_images,
-        data.style_tags || []
+        JSON.stringify(data.style_tags || [])
       ]);
     }
 

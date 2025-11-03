@@ -11,6 +11,36 @@ const r2Storage = require('./r2Storage');
 const logger = require('../utils/logger');
 const axios = require('axios');
 const crypto = require('crypto');
+const { normalizePromptMetadata } = require('../utils/promptMetadata');
+
+const pickFirstString = (...candidates) => {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (typeof candidate === 'string') {
+      const trimmed = candidate.trim();
+      if (trimmed) return trimmed;
+    } else if (Array.isArray(candidate)) {
+      for (const item of candidate) {
+        const found = pickFirstString(item);
+        if (found) return found;
+      }
+    } else if (typeof candidate === 'object') {
+      const record = candidate || {};
+      const nested = pickFirstString(
+        record.name,
+        record.label,
+        record.value,
+        record.title,
+        record.description,
+        record.text,
+        record.type
+      );
+      if (nested) return nested;
+    }
+  }
+  return null;
+};
+
 
 class ImageGenerationAgent {
   /**
@@ -434,7 +464,8 @@ class ImageGenerationAgent {
    * Generate batch of images
    */
   async generateBatch(userId, count = 10, options = {}) {
-    const PromptBuilderAgent = options.promptBuilder || require('./promptBuilderAgent');
+    const { promptBuilder, ...generationOptions } = options || {};
+    const PromptBuilderAgent = promptBuilder || require('./IntelligentPromptBuilder');
     const generations = [];
 
     // Generate varied prompts for each image
@@ -442,29 +473,78 @@ class ImageGenerationAgent {
       try {
         // Add variation to ensure different prompts
         const variedOptions = {
-          ...options,
+          ...generationOptions,
           variationSeed: i, // Add seed for variation
-          mode: options.mode || (i % 3 === 0 ? 'exploratory' : i % 3 === 1 ? 'refinement' : 'creative')
+          mode:
+            generationOptions.mode ||
+            (i % 3 === 0 ? 'exploratory' : i % 3 === 1 ? 'refinement' : 'creative'),
         };
-      
+
         // Generate prompt with variation seed
         const prompt = await PromptBuilderAgent.generatePrompt(userId, variedOptions);
-      
+
+        const promptId = prompt?.prompt_id || prompt?.id;
+        if (!promptId) {
+          logger.error('Batch generation prompt missing ID', {
+            index: i,
+            hasPrompt: !!prompt,
+            keys: prompt ? Object.keys(prompt) : [],
+          });
+          continue;
+        }
+
+        const promptText =
+          pickFirstString(
+            prompt?.positive_prompt,
+            prompt?.text,
+            prompt?.prompt,
+            prompt?.display_text,
+            prompt?.rendered
+          ) || null;
+
+        const promptMetadataRaw =
+          (prompt && typeof prompt.metadata === 'object' && prompt.metadata) ||
+          (prompt && typeof prompt.json_spec === 'object' && prompt.json_spec) ||
+          {};
+
+        const { metadata: normalizedPromptMetadata, tags: derivedTags } =
+          normalizePromptMetadata(promptMetadataRaw);
+
         // Generate image
-        const generation = await this.generateImage(userId, prompt.id, options);
+        const generation = await this.generateImage(userId, promptId, generationOptions);
+
+        const existingTags = Array.isArray(generation.tags)
+          ? generation.tags.filter((value) => typeof value === 'string' && value.trim())
+          : [];
+
+        generation.prompt_id = generation.prompt_id || promptId;
+        generation.prompt_text = generation.prompt_text || promptText;
+        generation.prompt_metadata =
+          generation.prompt_metadata || promptMetadataRaw || {};
+        generation.metadata = {
+          ...(generation.metadata || {}),
+          ...normalizedPromptMetadata,
+        };
+        if (!generation.metadata.spec) {
+          generation.metadata.spec = promptMetadataRaw;
+        }
+        if (!generation.metadata.generatedAt && generation.created_at) {
+          generation.metadata.generatedAt = generation.created_at;
+        }
+        generation.tags = Array.from(new Set([...existingTags, ...derivedTags]));
+
         generations.push(generation);
 
-        logger.info('Batch generation progress', { 
-          completed: i + 1, 
+        logger.info('Batch generation progress', {
+          completed: i + 1,
           total: count,
-          promptId: prompt.id,
-          promptText: prompt.text.substring(0, 100) + '...'
+          promptId,
+          promptText: (prompt?.text || prompt?.positive_prompt || '').substring(0, 100) + '...',
         });
-
       } catch (error) {
-        logger.error('Batch generation item failed', { 
-          index: i, 
-          error: error.message 
+        logger.error('Batch generation item failed', {
+          index: i,
+          error: error.message,
         });
       }
     }

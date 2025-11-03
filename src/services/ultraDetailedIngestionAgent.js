@@ -204,7 +204,7 @@ class UltraDetailedIngestionAgent {
 
   /**
    * ═══════════════════════════════════════════════════════════════════════════
-   * ANALYZE SINGLE IMAGE (Core analysis logic)
+   * ANALYZE SINGLE IMAGE (Core analysis logic with timeout)
    * ═══════════════════════════════════════════════════════════════════════════
    */
   async analyzeImage(image) {
@@ -218,17 +218,28 @@ class UltraDetailedIngestionAgent {
     });
 
     try {
-      const output = await this.replicate.run(
-        'google/gemini-2.5-flash',
-        {
-          input: {
-            prompt: this.getComprehensivePrompt(),
-            image: dataUri,
-            max_output_tokens: 8192,
-            temperature: 0.1
-          }
-        }
+      const timeoutMs = parseInt(process.env.REPLICATE_TIMEOUT_MS || '120000', 10);
+      
+      // Create a timeout promise
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`Replicate API timeout after ${timeoutMs}ms`)), timeoutMs)
       );
+      
+      // Race the API call against the timeout
+      const output = await Promise.race([
+        this.replicate.run(
+          'google/gemini-2.5-flash',
+          {
+            input: {
+              prompt: this.getComprehensivePrompt(),
+              image: dataUri,
+              max_output_tokens: 8192,
+              temperature: 0.1
+            }
+          }
+        ),
+        timeoutPromise
+      ]);
 
       const responseText = Array.isArray(output) ? output.join('') : output;
       const analysis = this.parseJsonResponse(responseText);
@@ -842,8 +853,21 @@ class UltraDetailedIngestionAgent {
   async fetchImage(url) {
     if (url.startsWith('http')) {
       const axios = require('axios');
-      const response = await axios.get(url, { responseType: 'arraybuffer' });
-      return Buffer.from(response.data);
+      const timeout = parseInt(process.env.IMAGE_FETCH_TIMEOUT_MS || '30000', 10);
+      
+      try {
+        const response = await axios.get(url, { 
+          responseType: 'arraybuffer',
+          timeout: timeout
+        });
+        return Buffer.from(response.data);
+      } catch (error) {
+        if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+          logger.error('Image fetch timeout', { url, timeout });
+          throw new Error(`Image fetch timeout after ${timeout}ms: ${url}`);
+        }
+        throw error;
+      }
     }
     
     throw new Error('Invalid image URL');

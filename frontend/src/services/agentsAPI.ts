@@ -4,8 +4,7 @@
  */
 
 import axios from 'axios';
-
-const AGENTS_API_URL = process.env.REACT_APP_AGENTS_API_URL || 'http://localhost:8000';
+import { AGENTS_API_URL } from '../config/env';
 
 const agentsHTTP = axios.create({
   baseURL: AGENTS_API_URL,

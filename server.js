@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const fs = require('fs');
 const http = require('http');
 const socketIo = require('socket.io');
 require('dotenv').config();
@@ -14,6 +15,7 @@ const logger = require('./src/utils/logger');
 const db = require('./src/services/database');
 const redis = require('./src/services/redis');
 const r2Storage = require('./src/services/r2Storage');
+const archiveCleanupService = require('./src/services/archiveCleanupService');
 
 // Import API routes
 const authRoutes = require('./src/api/routes/auth');
@@ -29,6 +31,8 @@ const rlhfRoutes = require('./src/api/routes/rlhf');
 const styleClusteringRoutes = require('./src/routes/styleClusteringRoutes');
 const agentsRoutes = require('./src/api/routes/agents');
 const podnaRoutes = require('./src/api/routes/podna');
+const podsRoutes = require('./src/api/routes/pods');
+const modelGenderRoutes = require('./src/api/routes/modelGenderRoutes');
 
 // CORS configuration - Allow multiple frontend ports
 const allowedOrigins = [
@@ -98,9 +102,22 @@ app.options('*', cors());
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
-// Serve static files
-app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
+// Serve static files (prefer the new Vite build but keep legacy assets)
+const frontendBuildPath = path.join(__dirname, 'frontend', 'build');
+const legacyPublicPath = path.join(__dirname, 'public');
+const staticRoots = [
+  frontendBuildPath,
+  legacyPublicPath,
+].filter((dir) => fs.existsSync(dir));
+
+staticRoots.forEach((dir) => {
+  app.use(express.static(dir));
+});
+
+const uploadsDir = path.join(legacyPublicPath, 'uploads');
+if (fs.existsSync(uploadsDir)) {
+  app.use('/uploads', express.static(uploadsDir));
+}
 
 // API Routes
 app.use('/api/auth', authRoutes);
@@ -123,6 +140,8 @@ app.use('/api/rlhf', rlhfRoutes); // RLHF feedback and weight management
 app.use('/api/style-clustering', styleClusteringRoutes); // Style clustering and Pinecone integration
 app.use('/api/agents', agentsRoutes); // AI Agents multi-agent system
 app.use('/api/podna', podnaRoutes); // Podna simplified agent system
+app.use('/api/pods', authMiddleware, podsRoutes); // User pods (collections)
+app.use('/api/model-gender', authMiddleware, modelGenderRoutes); // Model gender preference management
 
 // Health check endpoint
 app.get('/health', async (req, res) => {
@@ -175,9 +194,25 @@ app.set('io', io);
 // Error handling middleware (must be last)
 app.use(errorHandler);
 
-// Catch-all handler for React router
+// Catch-all handler for React router (prefer new build index)
+const candidateIndexFiles = [
+  path.join(frontendBuildPath, 'index.html'),
+  path.join(legacyPublicPath, 'index.html'),
+];
+
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  // Don't serve HTML for API routes - return 404 JSON instead
+  if (req.path.startsWith('/api')) {
+    return res.status(404).json({ error: 'API endpoint not found' });
+  }
+
+  for (const indexPath of candidateIndexFiles) {
+    if (fs.existsSync(indexPath)) {
+      return res.sendFile(indexPath);
+    }
+  }
+
+  res.status(404).send('Frontend build not found');
 });
 
 const PORT = process.env.PORT || 3001;
@@ -218,6 +253,51 @@ const startServer = async () => {
 
     // Start server
     logger.info(`About to start server on port ${PORT}...`);
+    
+    // Schedule archive cleanup job - runs daily at 2:00 AM
+    const scheduleArchiveCleanup = () => {
+      const now = new Date();
+      const target = new Date();
+      target.setHours(2, 0, 0, 0);
+      
+      // If it's already past 2:00 AM today, schedule for tomorrow
+      if (now > target) {
+        target.setDate(target.getDate() + 1);
+      }
+      
+      const delay = target.getTime() - now.getTime();
+      
+      logger.info('Archive Cleanup Scheduler initialized', {
+        nextRunAt: target.toISOString(),
+        delayMs: delay,
+        delayHours: (delay / (1000 * 60 * 60)).toFixed(2)
+      });
+      
+      // Run immediately on startup with small delay to allow services to stabilize
+      setTimeout(async () => {
+        try {
+          logger.info('Archive Cleanup: Running scheduled cleanup (startup)');
+          const result = await archiveCleanupService.cleanupExpiredArchives();
+          logger.info('Archive Cleanup: Scheduled cleanup completed', { result });
+        } catch (error) {
+          logger.error('Archive Cleanup: Scheduled cleanup failed', { error: error.message });
+        }
+        
+        // Schedule for daily execution after initial run
+        setInterval(async () => {
+          try {
+            logger.info('Archive Cleanup: Running scheduled cleanup (daily)');
+            const result = await archiveCleanupService.cleanupExpiredArchives();
+            logger.info('Archive Cleanup: Daily cleanup completed', { result });
+          } catch (error) {
+            logger.error('Archive Cleanup: Daily cleanup failed', { error: error.message });
+          }
+        }, 24 * 60 * 60 * 1000); // Every 24 hours
+      }, 5000); // Wait 5 seconds for services to stabilize
+    };
+    
+    // Initialize cleanup scheduler
+    scheduleArchiveCleanup();
     
     // Handle specific server errors
     server.on('error', (error) => {

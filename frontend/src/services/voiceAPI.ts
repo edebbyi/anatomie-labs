@@ -5,8 +5,7 @@
 
 import axios from 'axios';
 import authAPI from './authAPI';
-
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
+import { API_URL } from '../config/env';
 
 const voiceHTTP = axios.create({
   baseURL: `${API_URL}/voice`,

@@ -60,9 +60,6 @@ export function StyleProfile({ profile, onGenerateStyle }: StyleProfileProps) {
                     <div>
                       <CardTitle className="flex items-center gap-2">
                         {cluster.name}
-                        <Badge variant="outline" className="ml-2">
-                          {cluster.weight}%
-                        </Badge>
                       </CardTitle>
                       <CardDescription className="mt-2">
                         {cluster.description}

@@ -1,4 +1,5 @@
 const db = require('../services/database');
+const { POSITIVE_FEEDBACK_TYPES } = require('../constants/feedback');
 
 class Image {
   /**
@@ -326,6 +327,39 @@ class Image {
     `;
 
     const result = await db.query(query, [userId, limit]);
+    return result.rows;
+  }
+
+  /**
+   * Find liked images for a user
+   * @param {string} userId - User ID
+   * @returns {Promise<Array>} Array of liked images with metadata
+   */
+  static async findLikedByUser(userId) {
+    const query = `
+      SELECT
+        g.id,
+        g.url,
+        g.created_at,
+        f.created_at AS liked_at,
+        p.text AS prompt_text,
+        p.json_spec,
+        COALESCE(
+          ARRAY_REMOVE(ARRAY_AGG(pi.pod_id), NULL),
+          '{}'
+        ) AS pod_ids
+      FROM feedback f
+      JOIN generations g ON g.id = f.generation_id
+      LEFT JOIN prompts p ON p.id = g.prompt_id
+      LEFT JOIN pod_images pi ON pi.image_id = g.id
+      WHERE f.user_id = $1
+        AND g.user_id = $1
+        AND f.type = ANY($2)
+      GROUP BY g.id, f.created_at, p.text, p.json_spec
+      ORDER BY f.created_at DESC
+    `;
+
+    const result = await db.query(query, [userId, POSITIVE_FEEDBACK_TYPES]);
     return result.rows;
   }
 }

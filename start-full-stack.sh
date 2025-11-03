@@ -47,7 +47,7 @@ if lsof -Pi :3000 -sTCP:LISTEN -t >/dev/null ; then
 else
     echo "${BLUE}Starting Frontend Server...${NC}"
     cd /Users/esosaimafidon/Documents/GitHub/anatomie-lab/frontend
-    npm start > ../logs/frontend.log 2>&1 &
+    npm run dev > ../logs/frontend.log 2>&1 &
     FRONTEND_PID=$!
     echo "${GREEN}✅ Frontend started (PID: $FRONTEND_PID)${NC}"
     echo "   Logs: logs/frontend.log"

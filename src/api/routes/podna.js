@@ -10,11 +10,13 @@ const { asyncHandler } = require('../../middleware/errorHandler');
 const { authMiddleware } = require('../../middleware/auth');
 const logger = require('../../utils/logger');
 const db = require('../../services/database');
+const { normalizePromptMetadata } = require('../../utils/promptMetadata');
 
 // Import agents
 const ingestionAgent = require('../../services/ingestionAgent');
 const styleDescriptorAgent = require('../../services/ultraDetailedIngestionAgent');
 const trendAnalysisAgent = require('../../services/trendAnalysisAgent');
+const modelGenderService = require('../../services/modelGenderDetectionService');
 const promptBuilderAgent = require('../../services/advancedPromptBuilderAgent');
 const intelligentPromptBuilder = require('../../services/IntelligentPromptBuilder');
 const PromptBuilderRouter = require('../../services/promptBuilderRouter');
@@ -23,7 +25,19 @@ const PromptBuilderRouter = require('../../services/promptBuilderRouter');
 const promptRouter = new PromptBuilderRouter(10);
 const imageGenerationAgent = require('../../services/imageGenerationAgent');
 const feedbackLearnerAgent = require('../../services/feedbackLearnerAgent');
-const continuousLearningAgent = require('../../services/continuousLearningAgent');
+
+// Optional: continuousLearningAgent (not yet implemented)
+let continuousLearningAgent = null;
+try {
+  const cla = require('../../services/continuousLearningAgent');
+  if (cla && typeof cla.trackInteraction === 'function') {
+    continuousLearningAgent = cla;
+  }
+} catch (err) {
+  // Module not available - continue without it
+  logger.debug('continuousLearningAgent not available', { error: err.message });
+}
+
 const validationAgent = require('../../services/validationAgent');
 
 // Add this after the existing imports
@@ -139,7 +153,9 @@ router.post('/analyze/:portfolioId', authMiddleware, asyncHandler(async (req, re
         error: progress.error
       });
       
-      // Track interaction for continuous learning (non-blocking)
+      // Track interaction for continuous learning (non-blocking) - temporarily disabled
+      // TODO: Re-enable once continuousLearningAgent is properly implemented
+      /*
       if (progress.currentImage) {
         continuousLearningAgent.trackInteraction(userId, null, {
           event_type: 'image_analysis_progress',
@@ -155,6 +171,7 @@ router.post('/analyze/:portfolioId', authMiddleware, asyncHandler(async (req, re
           logger.warn('Failed to track progress interaction', { error: err.message });
         });
       }
+      */
     });
 
     // Mark as complete
@@ -241,21 +258,57 @@ router.post('/profile/generate/:portfolioId', authMiddleware, asyncHandler(async
     // Generate with Trend Analysis Agent
     const profile = await trendAnalysisAgent.generateEnhancedStyleProfile(userId, portfolioId);
 
+    // Parse JSON fields
+    const parseJSON = (field) => {
+      try {
+        return typeof field === 'string' ? JSON.parse(field) : field;
+      } catch (e) {
+        logger.warn('Failed to parse JSON field', { error: e.message });
+        return field;
+      }
+    };
+
+    // Generate clusters from aesthetic themes
+    const aestheticThemesArray = Array.isArray(profile.aesthetic_themes) 
+      ? profile.aesthetic_themes 
+      : parseJSON(profile.aesthetic_themes) || [];
+    
+    const clusters = aestheticThemesArray.slice(0, 5).map((theme, index) => ({
+      name: theme.name || `Cluster ${index + 1}`,
+      cluster_name: theme.name || `Cluster ${index + 1}`,
+      weight: theme.score || theme.weight || (1 / Math.max(aestheticThemesArray.length, 1)),
+      score: theme.score || theme.weight || (1 / Math.max(aestheticThemesArray.length, 1)),
+      description: theme.description || `Key aesthetic direction in your portfolio`,
+      signatureDetails: theme.signatureDetails || [],
+      topDescriptors: theme.descriptors ? (Array.isArray(theme.descriptors) ? theme.descriptors : []) : []
+    }));
+
+    // Generate style labels from aesthetic themes
+    const styleTags = Array.isArray(profile.style_tags) 
+      ? profile.style_tags 
+      : parseJSON(profile.style_tags) || [];
+    
+    const styleLabels = styleTags.slice(0, 10).map(tag => ({
+      name: tag,
+      score: 1,
+      count: 1
+    }));
+
     res.json({
       success: true,
       message: 'Style profile generated successfully',
       data: {
         profile: {
           id: profile.id,
-          styleLabels: profile.style_labels,
-          clusters: profile.clusters,
+          styleLabels: styleLabels,
+          clusters: clusters,
           summaryText: profile.summary_text,
           totalImages: profile.total_images,
           distributions: {
-            garments: profile.garment_distribution,
-            colors: profile.color_distribution,
-            fabrics: profile.fabric_distribution,
-            silhouettes: profile.silhouette_distribution
+            garments: parseJSON(profile.garment_distribution),
+            colors: parseJSON(profile.color_distribution),
+            fabrics: parseJSON(profile.fabric_distribution),
+            silhouettes: parseJSON(profile.silhouette_distribution)
           }
         }
       }
@@ -322,10 +375,38 @@ router.get('/profile', authMiddleware, asyncHandler(async (req, res) => {
       avg_confidence: profile.avg_confidence
     });
 
+    // Generate clusters from aesthetic themes (for frontend display)
+    const aestheticThemesArray = Array.isArray(profile.aesthetic_themes) 
+      ? profile.aesthetic_themes 
+      : parseJSON(profile.aesthetic_themes) || [];
+    
+    const clusters = aestheticThemesArray.slice(0, 5).map((theme, index) => ({
+      name: theme.name || `Cluster ${index + 1}`,
+      cluster_name: theme.name || `Cluster ${index + 1}`,
+      weight: theme.score || theme.weight || (1 / Math.max(aestheticThemesArray.length, 1)),
+      score: theme.score || theme.weight || (1 / Math.max(aestheticThemesArray.length, 1)),
+      description: theme.description || `Key aesthetic direction in your portfolio`,
+      signatureDetails: theme.signatureDetails || [],
+      topDescriptors: theme.descriptors ? (Array.isArray(theme.descriptors) ? theme.descriptors : []) : []
+    }));
+
+    // Generate style labels from aesthetic themes
+    const styleTags = Array.isArray(profile.style_tags) 
+      ? profile.style_tags 
+      : parseJSON(profile.style_tags) || [];
+    
+    const styleLabels = styleTags.slice(0, 10).map(tag => ({
+      name: tag,
+      score: 1,
+      count: 1
+    }));
+
     logger.info('Podna: Style profile fetched successfully', { 
       userId, 
       profileId: profile.id,
-      imageCount: imagesResult.rows.length 
+      imageCount: imagesResult.rows.length,
+      clustersCount: clusters.length,
+      styleLabelsCount: styleLabels.length
     });
 
     res.json({
@@ -334,8 +415,8 @@ router.get('/profile', authMiddleware, asyncHandler(async (req, res) => {
         profile: {
           id: profile.id,
           portfolioId: profile.portfolio_id,
-          styleLabels: parseJSON(profile.style_labels),
-          clusters: parseJSON(profile.clusters),
+          styleLabels: styleLabels,
+          clusters: clusters,
           summaryText: profile.summary_text,
           totalImages: profile.total_images,
           distributions: {
@@ -344,8 +425,8 @@ router.get('/profile', authMiddleware, asyncHandler(async (req, res) => {
             fabrics: parseJSON(profile.fabric_distribution),
             silhouettes: parseJSON(profile.silhouette_distribution)
           },
-          styleTags: Array.isArray(profile.style_tags) ? profile.style_tags : parseJSON(profile.style_tags) || [],
-          aestheticThemes: parseJSON(profile.aesthetic_themes),
+          styleTags: styleTags,
+          aestheticThemes: aestheticThemesArray,
           constructionPatterns: parseJSON(profile.construction_patterns),
           signaturePieces: parseJSON(profile.signature_pieces),
           updatedAt: profile.updated_at,
@@ -596,19 +677,50 @@ router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
       { provider, upscale }
     );
 
+    const promptText =
+      generationPrompt.positive_prompt ||
+      generationPrompt.text ||
+      generationPrompt.prompt ||
+      null;
+    const promptMetadataRaw =
+      (generationPrompt && typeof generationPrompt.metadata === 'object' && generationPrompt.metadata) ||
+      (generationPrompt && typeof generationPrompt.json_spec === 'object' && generationPrompt.json_spec) ||
+      {};
+
+    const { metadata: normalizedPromptMetadata, tags: derivedTags } = normalizePromptMetadata(promptMetadataRaw);
+    const existingTags = Array.isArray(generation.tags)
+      ? generation.tags.filter((value) => typeof value === 'string' && value.trim())
+      : [];
+
+    generation.prompt_text = generation.prompt_text || promptText;
+    generation.prompt_metadata = generation.prompt_metadata || promptMetadataRaw;
+    generation.metadata = {
+      ...(generation.metadata || {}),
+      ...normalizedPromptMetadata,
+    };
+    if (!generation.metadata.spec) {
+      generation.metadata.spec = promptMetadataRaw;
+    }
+    if (!generation.metadata.generatedAt && generation.created_at) {
+      generation.metadata.generatedAt = generation.created_at;
+    }
+    generation.tags = Array.from(new Set([...existingTags, ...derivedTags]));
+
     // Track generation interaction for continuous learning (non-blocking)
-    continuousLearningAgent.trackInteraction(userId, generation.id, {
-      event_type: 'image_generation',
-      metadata: {
-        promptId: generationPrompt.id || generationPrompt.prompt_id,
-        provider,
-        mode,
-        hasUserPrompt: !!prompt,
-        interpreted: !!interpretation
-      }
-    }).catch(err => {
-      logger.warn('Failed to track generation interaction', { error: err.message });
-    });
+    if (continuousLearningAgent && typeof continuousLearningAgent.trackInteraction === 'function') {
+      continuousLearningAgent.trackInteraction(userId, generation.id, {
+        event_type: 'image_generation',
+        metadata: {
+          promptId: generationPrompt.id || generationPrompt.prompt_id,
+          provider,
+          mode,
+          hasUserPrompt: !!prompt,
+          interpreted: !!interpretation
+        }
+      }).catch(err => {
+        logger.warn('Failed to track generation interaction', { error: err.message });
+      });
+    }
 
     // STEP 5: Build enhanced response with interpretation details
     const response = {
@@ -618,8 +730,13 @@ router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
         generation: {
           id: generation.id,
           url: generation.url,
-          promptText: generationPrompt.text || generationPrompt.positive_prompt,
+          prompt: generation.prompt_text || promptText,
+          promptText: generation.prompt_text || promptText,
+          prompt_text: generation.prompt_text || promptText,
           promptSpec: generationPrompt.json_spec || generationPrompt.metadata,
+          promptMetadata: generation.prompt_metadata || null,
+          metadata: generation.metadata || generation.prompt_metadata || null,
+          tags: Array.isArray(generation.tags) ? generation.tags : derivedTags,
           provider: generation.provider,
           costCents: generation.cost_cents,
           createdAt: generation.created_at
@@ -713,12 +830,42 @@ router.post('/generate-with-dna', authMiddleware, asyncHandler(async (req, res) 
       userPrompt: prompt
     });
 
+    const dnaPromptText =
+      promptResult.positive_prompt ||
+      promptResult.text ||
+      promptResult.prompt ||
+      null;
+    const dnaPromptMetadataRaw =
+      (promptResult && typeof promptResult.metadata === 'object' && promptResult.metadata) ||
+      (promptResult && typeof promptResult.json_spec === 'object' && promptResult.json_spec) ||
+      {};
+    const { metadata: dnaNormalizedMetadata, tags: dnaDerivedTags } =
+      normalizePromptMetadata(dnaPromptMetadataRaw);
+
     // Generate images
     const generations = [];
 
     for (let i = 0; i < count; i++) {
       try {
         const generation = await imageGenerationAgent.generateImage(userId, promptResult.prompt_id, options);
+
+        const existingTags = Array.isArray(generation.tags)
+          ? generation.tags.filter((value) => typeof value === 'string' && value.trim())
+          : [];
+
+        generation.prompt_text = generation.prompt_text || dnaPromptText;
+        generation.prompt_metadata = generation.prompt_metadata || dnaPromptMetadataRaw;
+        generation.metadata = {
+          ...(generation.metadata || {}),
+          ...dnaNormalizedMetadata,
+        };
+        if (!generation.metadata.spec) {
+          generation.metadata.spec = dnaPromptMetadataRaw;
+        }
+        if (!generation.metadata.generatedAt && generation.created_at) {
+          generation.metadata.generatedAt = generation.created_at;
+        }
+        generation.tags = Array.from(new Set([...existingTags, ...dnaDerivedTags]));
         
         // Add brand consistency score to generation
         generation.brand_consistency_score = promptResult.metadata.brand_consistency_score;
@@ -742,7 +889,24 @@ router.post('/generate-with-dna', authMiddleware, asyncHandler(async (req, res) 
     res.json({
       success: true,
       data: {
-        generations,
+        generations: generations.map((g) => {
+          const promptTextValue = g.prompt_text || dnaPromptText;
+          return {
+            id: g.id,
+            url: g.url,
+            createdAt: g.created_at,
+            prompt: promptTextValue,
+            promptText: promptTextValue,
+            prompt_text: promptTextValue,
+            metadata: g.metadata || g.prompt_metadata || null,
+            promptMetadata: g.prompt_metadata || null,
+            tags: Array.isArray(g.tags) ? g.tags : dnaDerivedTags,
+            provider: g.provider,
+            costCents: g.cost_cents ?? null,
+            brandConsistencyScore: g.brand_consistency_score,
+            brandDNAApplied: g.brand_dna_applied
+          };
+        }),
         prompt: promptResult,
         brandDNA: brandDNA ? {
           primaryAesthetic: brandDNA.primaryAesthetic,
@@ -791,20 +955,31 @@ router.post('/generate/batch', authMiddleware, asyncHandler(async (req, res) => 
       promptBuilder: promptRouter
     });
 
+    if (generations.length === 0) {
+      logger.error('Podna: Batch generation returned no images', { userId, count, mode, provider });
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to generate images',
+        code: 'NO_GENERATIONS'
+      });
+    }
+
     const totalCost = generations.reduce((sum, g) => sum + (g.cost_cents || 0), 0);
 
     // Track batch generation interaction for continuous learning (non-blocking)
-    continuousLearningAgent.trackInteraction(userId, null, {
-      event_type: 'batch_generation',
-      metadata: {
-        count,
-        mode,
-        provider,
-        actualCount: generations.length
-      }
-    }).catch(err => {
-      logger.warn('Failed to track batch generation interaction', { error: err.message });
-    });
+    if (continuousLearningAgent && typeof continuousLearningAgent.trackInteraction === 'function') {
+      continuousLearningAgent.trackInteraction(userId, null, {
+        event_type: 'batch_generation',
+        metadata: {
+          count,
+          mode,
+          provider,
+          actualCount: generations.length
+        }
+      }).catch(err => {
+        logger.warn('Failed to track batch generation interaction', { error: err.message });
+      });
+    }
 
     res.json({
       success: true,
@@ -812,11 +987,29 @@ router.post('/generate/batch', authMiddleware, asyncHandler(async (req, res) => 
       data: {
         count: generations.length,
         totalCostCents: totalCost,
-        generations: generations.map(g => ({
-          id: g.id,
-          url: g.url,
-          createdAt: g.created_at
-        }))
+        generations: generations.map(g => {
+          const promptText = g.prompt_text || g.promptText || g.prompt || null;
+          const promptMetadata = g.prompt_metadata || g.promptMetadata || null;
+          const normalizedMetadata = g.metadata || promptMetadata || null;
+          const tags = Array.isArray(g.tags)
+            ? g.tags.filter(tag => typeof tag === 'string' && tag.trim())
+            : [];
+
+          return {
+            id: g.id,
+            url: g.url,
+            createdAt: g.created_at || g.createdAt || new Date().toISOString(),
+            promptId: g.prompt_id,
+            prompt: promptText,
+            promptText,
+            prompt_text: promptText,
+            metadata: normalizedMetadata,
+            promptMetadata,
+            tags,
+            provider: g.provider,
+            costCents: g.cost_cents ?? null
+          };
+        })
       }
     });
 
@@ -833,73 +1026,46 @@ router.post('/generate/batch', authMiddleware, asyncHandler(async (req, res) => 
 /**
  * GET /api/podna/gallery
  * Get user's generated images with metadata for filtering
+ * Query params:
+ *   - limit: number of images to return (default 50)
+ *   - archived: true to show archived images only, false to exclude archived (default false)
  */
 router.get('/gallery', authMiddleware, asyncHandler(async (req, res) => {
   const userId = req.user.id;
   const limit = parseInt(req.query.limit) || 50;
+  const archived = req.query.archived === 'true';
 
-  // Modified to return all generated images, not just liked ones
+  // Modified to return all generated images, excluding archived by default
+  // Add archived filter based on query parameter
   const query = `
     SELECT g.*, p.text as prompt_text, p.json_spec
     FROM generations g
     JOIN prompts p ON g.prompt_id = p.id
-    WHERE g.user_id = $1
+    WHERE g.user_id = $1 AND g.archived = $3
     ORDER BY g.created_at DESC
     LIMIT $2
   `;
 
-  const result = await db.query(query, [userId, limit]);
+  const result = await db.query(query, [userId, limit, archived]);
   const generations = result.rows;
 
-  // Extract metadata from prompt specifications for filtering
-  const generationsWithMetadata = generations.map(g => {
-    // Extract metadata from the prompt specification
-    let metadata = {};
-    
-    if (g.json_spec && g.json_spec.thompson_selection) {
-      const selection = g.json_spec.thompson_selection;
-      
-      // Extract colors
-      if (selection.colors && Array.isArray(selection.colors)) {
-        metadata.colors = selection.colors.map(c => 
-          typeof c === 'string' ? c : (c.name || JSON.stringify(c))
-        );
-      }
-      
-      // Extract garment type
-      if (selection.garment && selection.garment.type) {
-        metadata.garmentType = selection.garment.type;
-      } else if (selection.garment && typeof selection.garment === 'string') {
-        metadata.garmentType = selection.garment;
-      }
-      
-      // Extract style tags/aesthetic
-      if (selection.styleContext) {
-        metadata.styleTags = [selection.styleContext];
-      }
-      
-      // Extract silhouette
-      if (selection.garment && selection.garment.silhouette) {
-        metadata.silhouette = selection.garment.silhouette;
-      }
-      
-      // Extract fabric
-      if (selection.fabric && selection.fabric.material) {
-        metadata.fabric = selection.fabric.material;
-      } else if (selection.fabric && typeof selection.fabric === 'string') {
-        metadata.fabric = selection.fabric;
-      }
-    }
-    
+  const generationsWithMetadata = generations.map((g) => {
+    const promptMetadataRaw = g.json_spec || g.prompt_metadata || {};
+    const { metadata: normalizedMetadata, tags: derivedTags } = normalizePromptMetadata(promptMetadataRaw);
+    const promptText = g.prompt_text || g.prompt || null;
+
     return {
       id: g.id,
       url: g.url,
-      promptText: g.prompt_text,
-      promptSpec: g.json_spec,
-      provider: g.provider,
-      costCents: g.cost_cents,
       createdAt: g.created_at,
-      metadata: metadata
+      prompt: promptText,
+      promptText,
+      prompt_text: promptText,
+      metadata: normalizedMetadata,
+      promptMetadata: promptMetadataRaw,
+      tags: derivedTags,
+      provider: g.provider,
+      costCents: g.cost_cents ?? null
     };
   });
 
@@ -962,14 +1128,20 @@ router.post('/feedback', authMiddleware, asyncHandler(async (req, res) => {
     }
 
     // Track feedback interaction for continuous learning
-    await continuousLearningAgent.trackInteraction(userId, generationId, {
-      event_type: 'feedback',
-      metadata: {
-        feedbackType: type,
-        hasNote: !!note,
-        feedbackId: result.feedback.id
+    if (continuousLearningAgent && typeof continuousLearningAgent.trackInteraction === 'function') {
+      try {
+        await continuousLearningAgent.trackInteraction(userId, generationId, {
+          event_type: 'feedback',
+          metadata: {
+            feedbackType: type,
+            hasNote: !!note,
+            feedbackId: result.feedback.id
+          }
+        });
+      } catch (err) {
+        logger.warn('Failed to track feedback interaction', { error: err.message });
       }
-    });
+    }
 
     res.json({
       success: true,
@@ -1025,6 +1197,82 @@ router.get('/feedback', authMiddleware, asyncHandler(async (req, res) => {
 }));
 
 /**
+ * POST /api/podna/archive/:generationId
+ * Archive an image (mark as discarded)
+ */
+router.post('/archive/:generationId', authMiddleware, asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const { generationId } = req.params;
+
+  logger.info('Archiving generation', { userId, generationId });
+
+  // Update the generation to mark as archived
+  const archiveQuery = `
+    UPDATE generations
+    SET archived = TRUE, archived_at = CURRENT_TIMESTAMP
+    WHERE id = $1 AND user_id = $2
+    RETURNING id, archived, archived_at
+  `;
+
+  const result = await db.query(archiveQuery, [generationId, userId]);
+
+  if (result.rows.length === 0) {
+    return res.status(404).json({
+      success: false,
+      message: 'Generation not found or unauthorized'
+    });
+  }
+
+  res.json({
+    success: true,
+    message: 'Image archived successfully',
+    data: {
+      generationId: result.rows[0].id,
+      archived: result.rows[0].archived,
+      archivedAt: result.rows[0].archived_at
+    }
+  });
+}));
+
+/**
+ * POST /api/podna/unarchive/:generationId
+ * Restore an archived image
+ */
+router.post('/unarchive/:generationId', authMiddleware, asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const { generationId } = req.params;
+
+  logger.info('Unarchiving generation', { userId, generationId });
+
+  // Update the generation to mark as not archived
+  const unarchiveQuery = `
+    UPDATE generations
+    SET archived = FALSE, archived_at = NULL
+    WHERE id = $1 AND user_id = $2
+    RETURNING id, archived, archived_at
+  `;
+
+  const result = await db.query(unarchiveQuery, [generationId, userId]);
+
+  if (result.rows.length === 0) {
+    return res.status(404).json({
+      success: false,
+      message: 'Generation not found or unauthorized'
+    });
+  }
+
+  res.json({
+    success: true,
+    message: 'Image restored successfully',
+    data: {
+      generationId: result.rows[0].id,
+      archived: result.rows[0].archived,
+      archivedAt: result.rows[0].archived_at
+    }
+  });
+}));
+
+/**
  * POST /api/podna/onboard
  * Complete onboarding workflow (upload + analyze + profile generation + initial batch)
  */
@@ -1051,34 +1299,36 @@ router.post('/onboard', authMiddleware, upload.single('portfolio'), asyncHandler
     const portfolioId = uploadResult.portfolio.id;
 
     // Track ingestion interaction (non-blocking)
-    continuousLearningAgent.trackInteraction(userId, null, {
-      event_type: 'portfolio_upload',
-      metadata: {
-        portfolioId,
-        imageCount: uploadResult.portfolio.imageCount,
-        filename
-      }
-    }).catch(err => {
-      logger.warn('Failed to track upload interaction', { error: err.message });
-    });
+    // TODO: Re-enable once continuousLearningAgent is implemented
+    // continuousLearningAgent.trackInteraction(userId, null, {
+    //   event_type: 'portfolio_upload',
+    //   metadata: {
+    //     portfolioId,
+    //     imageCount: uploadResult.portfolio.imageCount,
+    //     filename
+    //   }
+    // }).catch(err => {
+    //   logger.warn('Failed to track upload interaction', { error: err.message });
+    // });
 
     // Step 2: Analyze images
     logger.info('Podna Onboarding: Step 2/4 - Analyzing images');
     const analysisResult = await styleDescriptorAgent.analyzePortfolio(portfolioId);
 
     // Track analysis interaction (non-blocking)
-    continuousLearningAgent.trackInteraction(userId, null, {
-      event_type: 'portfolio_analysis',
-      metadata: {
-        portfolioId,
-        analyzed: analysisResult.analyzed,
-        failed: analysisResult.failed,
-        avgConfidence: analysisResult.avgConfidence,
-        avgCompleteness: analysisResult.avgCompleteness
-      }
-    }).catch(err => {
-      logger.warn('Failed to track analysis interaction', { error: err.message });
-    });
+    // TODO: Re-enable once continuousLearningAgent is implemented
+    // continuousLearningAgent.trackInteraction(userId, null, {
+    //   event_type: 'portfolio_analysis',
+    //   metadata: {
+    //     portfolioId,
+    //     analyzed: analysisResult.analyzed,
+    //     failed: analysisResult.failed,
+    //     avgConfidence: analysisResult.avgConfidence,
+    //     avgCompleteness: analysisResult.avgCompleteness
+    //   }
+    // }).catch(err => {
+    //   logger.warn('Failed to track analysis interaction', { error: err.message });
+    // });
 
     // Step 3: Generate style profile
     logger.info('Podna Onboarding: Step 3/4 - Generating style profile');
@@ -1093,15 +1343,32 @@ router.post('/onboard', authMiddleware, upload.single('portfolio'), asyncHandler
     });
 
     // Track profile generation interaction (non-blocking)
-    continuousLearningAgent.trackInteraction(userId, null, {
-      event_type: 'profile_generation',
-      metadata: {
-        portfolioId,
-        profileId: profile.id
-      }
-    }).catch(err => {
-      logger.warn('Failed to track profile generation interaction', { error: err.message });
-    });
+    // TODO: Re-enable once continuousLearningAgent is implemented
+    // continuousLearningAgent.trackInteraction(userId, null, {
+    //   event_type: 'profile_generation',
+    //   metadata: {
+    //     portfolioId,
+    //     profileId: profile.id
+    //   }
+    // }).catch(err => {
+    //   logger.warn('Failed to track profile generation interaction', { error: err.message });
+    // });
+
+    // Analyze model gender from portfolio (non-blocking)
+    try {
+      logger.info('Podna Onboarding: Analyzing model gender distribution');
+      const genderAnalysis = await modelGenderService.analyzePortfolioForModelGender(userId, portfolioId);
+      logger.info('Podna Onboarding: Model gender analysis complete', {
+        detectedGender: genderAnalysis.detected_gender,
+        confidence: genderAnalysis.confidence,
+        percentages: genderAnalysis.percentages
+      });
+    } catch (error) {
+      logger.warn('Podna Onboarding: Failed to analyze model gender (non-blocking)', {
+        error: error.message
+      });
+      // Don't fail the onboarding if gender analysis fails
+    }
 
     // Step 4: Generate initial images (optional)
     let generations = [];
@@ -1114,16 +1381,17 @@ router.post('/onboard', authMiddleware, upload.single('portfolio'), asyncHandler
       });
       
       // Track initial generation interaction (non-blocking)
-      continuousLearningAgent.trackInteraction(userId, null, {
-        event_type: 'initial_generation',
-        metadata: {
-          count: initialCount,
-          actualCount: generations.length,
-          provider: 'imagen-4-ultra'
-        }
-      }).catch(err => {
-        logger.warn('Failed to track initial generation interaction', { error: err.message });
-      });
+      // TODO: Re-enable once continuousLearningAgent is implemented
+      // continuousLearningAgent.trackInteraction(userId, null, {
+      //   event_type: 'initial_generation',
+      //   metadata: {
+      //     count: initialCount,
+      //     actualCount: generations.length,
+      //     provider: 'imagen-4-ultra'
+      //   }
+      // }).catch(err => {
+      //   logger.warn('Failed to track initial generation interaction', { error: err.message });
+      // });
     }
 
     res.json({

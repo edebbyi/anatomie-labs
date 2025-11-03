@@ -6,6 +6,8 @@ const jobQueue = require('../../services/jobQueue');
 const redis = require('../../services/redis');
 const r2Storage = require('../../services/r2Storage');
 const Image = require('../../models/Image');
+const Pod = require('../../models/Pod');
+const { extractMetadataFromPromptSpec } = require('../../utils/promptMetadata');
 
 // Configure multer for memory storage
 const upload = multer({
@@ -14,6 +16,26 @@ const upload = multer({
 });
 
 const router = express.Router();
+
+const toLikedImageDto = (row) => ({
+  id: row.id,
+  url: row.url,
+  createdAt: row.created_at,
+  likedAt: row.liked_at,
+  promptText: row.prompt_text,
+  metadata: extractMetadataFromPromptSpec(row.json_spec),
+  podIds: Array.isArray(row.pod_ids) ? row.pod_ids : [],
+});
+
+const toPodDto = (row) => ({
+  id: row.id,
+  name: row.name,
+  description: row.description,
+  imageCount: Number(row.image_count) || 0,
+  coverImageUrl: row.cover_image_url || null,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
 
 /**
  * POST /api/images/generate
@@ -176,6 +198,53 @@ router.get('/gallery', asyncHandler(async (req, res) => {
         hasMore: result.pagination.hasMore
       }
     }
+  });
+}));
+
+/**
+ * GET /api/images/liked
+ * Get user's liked images (heart/save feedback)
+ */
+router.get('/liked', asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+
+  const likedImages = await Image.findLikedByUser(userId);
+
+  res.json({
+    success: true,
+    data: {
+      count: likedImages.length,
+      images: likedImages.map(toLikedImageDto),
+    },
+  });
+}));
+
+/**
+ * POST /api/images/:imageId/pods
+ * Assign an image to multiple pods (overwrites membership)
+ */
+router.post('/:imageId/pods', asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const { imageId } = req.params;
+  const { podIds } = req.body || {};
+
+  if (!Array.isArray(podIds)) {
+    const error = new Error('podIds array is required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const updatedPods = await Pod.setImagePods(userId, imageId, podIds);
+  const membershipPods = await Pod.getPodsForImage(userId, imageId);
+
+  res.json({
+    success: true,
+    message: 'Updated pod assignments for image',
+    data: {
+      podIds: membershipPods.map((pod) => pod.id),
+      pods: membershipPods.map(toPodDto),
+      updatedPods: updatedPods.map(toPodDto),
+    },
   });
 }));
 

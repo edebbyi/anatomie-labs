@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Heart, Download, Info } from 'lucide-react';
+import { Badge } from './ui/badge';
 
 interface GeneratedImage {
   id: string;
@@ -12,6 +13,14 @@ interface GeneratedImage {
     silhouette?: string;
     fabric?: string;
     styleTags?: string[];
+    details?: string;
+    shot?: string;
+    texture?: string;
+    lighting?: string;
+    promptId?: string;
+    generationId?: string;
+    generatedAt?: string;
+    spec?: unknown;
   };
 }
 
@@ -45,6 +54,34 @@ const Lightbox: React.FC<LightboxProps> = ({
   const wheelTimeoutRef = useRef<number>(0);
 
   const currentImage = images[currentIndex];
+  const metadata = (currentImage?.metadata || {}) as Record<string, any>;
+  const tags =
+    Array.isArray(currentImage?.tags) && (currentImage.tags as string[]).length > 0
+      ? (currentImage.tags as string[])
+      : Array.isArray(metadata.styleTags)
+        ? (metadata.styleTags as string[])
+        : [];
+  const promptText = (currentImage?.prompt || '').trim() || 'Prompt unavailable';
+  const displayData = {
+    garment: metadata.garmentType || metadata.garment,
+    colors: Array.isArray(metadata.colors) ? metadata.colors : [],
+    fabric: metadata.fabric || metadata.texture,
+    silhouette: metadata.silhouette || metadata.silhouette_type,
+    details: metadata.details,
+    shot: metadata.shot || metadata.lighting,
+  };
+
+  const generatedLabel = (() => {
+    const value = resolveGeneratedAt(currentImage);
+    if (!value) return 'Unknown';
+    return value.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  })();
 
   // Lock body scroll and ensure full coverage
   useEffect(() => {
@@ -257,15 +294,21 @@ const Lightbox: React.FC<LightboxProps> = ({
 
   const dragIndicator = getDragIndicator();
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-  };
+  function resolveGeneratedAt(image: any) {
+    if (!image) return null;
+
+    const source =
+      image.timestamp ||
+      image.createdAt ||
+      image.created_at ||
+      image?.metadata?.generatedAt ||
+      image?.metadata?.generated_at;
+
+    const parsed =
+      source instanceof Date ? source : source ? new Date(source) : null;
+
+    return parsed && !Number.isNaN(parsed.getTime()) ? parsed : null;
+  }
 
   return (
     <div
@@ -439,100 +482,78 @@ const Lightbox: React.FC<LightboxProps> = ({
 
             {/* Back - Details */}
             <div
+              className="absolute inset-0 overflow-y-auto rounded-[20px] bg-white p-8 shadow-2xl"
               style={{
-                position: 'absolute',
-                inset: 0,
                 backfaceVisibility: 'hidden',
                 transform: 'rotateY(180deg)',
-                background: 'linear-gradient(135deg, #1f2937 0%, #111827 100%)',
-                borderRadius: '20px',
-                padding: '32px',
-                overflowY: 'auto',
-                color: 'white',
+                display: 'flex',
+                flexDirection: 'column',
               }}
             >
-              <h3 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '16px' }}>Prompt</h3>
-              <p style={{ color: '#d1d5db', fontSize: '14px', lineHeight: '1.6', marginBottom: '32px' }}>
-                {currentImage.prompt}
-              </p>
-
-              <h4 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px', color: '#9ca3af' }}>Details</h4>
-              <div style={{ fontSize: '13px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '12px' }}>
-                  <span style={{ color: '#6b7280' }}>Generated</span>
-                  <span style={{ color: '#d1d5db' }}>{formatDate(currentImage.timestamp)}</span>
+              <div className="space-y-6 text-gray-900">
+                <div>
+                  <p className="text-sm font-medium uppercase tracking-wider text-gray-500">Prompt</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">{promptText}</p>
                 </div>
 
-                {currentImage.metadata?.garmentType && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '12px' }}>
-                    <span style={{ color: '#6b7280' }}>Garment</span>
-                    <span style={{ color: '#d1d5db', textTransform: 'capitalize' }}>{currentImage.metadata.garmentType}</span>
-                  </div>
-                )}
-
-                {currentImage.metadata?.silhouette && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '12px' }}>
-                    <span style={{ color: '#6b7280' }}>Silhouette</span>
-                    <span style={{ color: '#d1d5db', textTransform: 'capitalize' }}>{currentImage.metadata.silhouette}</span>
-                  </div>
-                )}
-
-                {currentImage.metadata?.fabric && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '12px' }}>
-                    <span style={{ color: '#6b7280' }}>Fabric</span>
-                    <span style={{ color: '#d1d5db', textTransform: 'capitalize' }}>{currentImage.metadata.fabric}</span>
-                  </div>
-                )}
-
-                {currentImage.metadata?.colors && currentImage.metadata.colors.length > 0 && (
-                  <div style={{ paddingBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '12px' }}>
-                    <span style={{ color: '#6b7280', display: 'block', marginBottom: '8px' }}>Colors</span>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                      {currentImage.metadata.colors.map((color, idx) => (
-                        <span
-                          key={idx}
-                          style={{
-                            padding: '6px 12px',
-                            backgroundColor: 'rgba(255,255,255,0.1)',
-                            color: '#d1d5db',
-                            borderRadius: '16px',
-                            fontSize: '12px',
-                            textTransform: 'capitalize',
-                          }}
-                        >
-                          {color}
-                        </span>
-                      ))}
+                <div className="grid gap-4 md:grid-cols-2">
+                  {displayData.garment && (
+                    <div>
+                      <p className="text-sm text-gray-500">Garment</p>
+                      <p className="text-gray-900">{displayData.garment}</p>
                     </div>
-                  </div>
-                )}
+                  )}
+                  {displayData.colors.length > 0 && (
+                    <div>
+                      <p className="text-sm text-gray-500">Colors</p>
+                      <p className="text-gray-900">{displayData.colors.join(', ')}</p>
+                    </div>
+                  )}
+                  {displayData.fabric && (
+                    <div>
+                      <p className="text-sm text-gray-500">Fabric</p>
+                      <p className="text-gray-900">{displayData.fabric}</p>
+                    </div>
+                  )}
+                  {displayData.silhouette && (
+                    <div>
+                      <p className="text-sm text-gray-500">Silhouette</p>
+                      <p className="text-gray-900">{displayData.silhouette}</p>
+                    </div>
+                  )}
+                  {displayData.details && (
+                    <div className="md:col-span-2">
+                      <p className="text-sm text-gray-500">Details</p>
+                      <p className="text-gray-900">{displayData.details}</p>
+                    </div>
+                  )}
+                  {displayData.shot && (
+                    <div>
+                      <p className="text-sm text-gray-500">Shot</p>
+                      <p className="text-gray-900">{displayData.shot}</p>
+                    </div>
+                  )}
+                </div>
 
-                {currentImage.metadata?.styleTags && currentImage.metadata.styleTags.length > 0 && (
-                  <div>
-                    <span style={{ color: '#6b7280', display: 'block', marginBottom: '8px' }}>Style Tags</span>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                      {currentImage.metadata.styleTags.map((tag, idx) => (
-                        <span
-                          key={idx}
-                          style={{
-                            padding: '6px 12px',
-                            backgroundColor: 'rgba(255,255,255,0.1)',
-                            color: '#d1d5db',
-                            borderRadius: '16px',
-                            fontSize: '12px',
-                            textTransform: 'capitalize',
-                          }}
-                        >
+                <div>
+                  <p className="text-sm text-gray-500">Tags</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {tags.length > 0 ? (
+                      tags.map((tag, idx) => (
+                        <Badge key={`${tag}-${idx}`} variant="secondary">
                           {tag}
-                        </span>
-                      ))}
-                    </div>
+                        </Badge>
+                      ))
+                    ) : (
+                      <span className="text-sm text-gray-400">No tags</span>
+                    )}
                   </div>
-                )}
-              </div>
+                </div>
 
-              <div style={{ marginTop: '32px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.1)', textAlign: 'center' }}>
-                <p style={{ fontSize: '11px', color: '#6b7280' }}>Click to flip back</p>
+                <div>
+                  <p className="text-sm text-gray-500">Generated</p>
+                  <p className="text-gray-900">{generatedLabel}</p>
+                </div>
               </div>
             </div>
           </div>

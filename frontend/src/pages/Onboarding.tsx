@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Sparkles, Upload, Loader } from 'lucide-react';
 import { agentsAPI } from '../services/agentsAPI';
 import authAPI from '../services/authAPI';
+import { API_URL } from '../config/env';
 
 const Onboarding: React.FC = () => {
   const navigate = useNavigate();
@@ -16,6 +17,354 @@ const Onboarding: React.FC = () => {
 
   const currentUser = authAPI.getCurrentUser();
   const userId = currentUser?.id;
+
+  const stringKeys = ['name', 'label', 'value', 'title', 'description', 'text', 'detail', 'material', 'styleContext', 'style_context', 'type'];
+
+  const collectStrings = (input: unknown, bucket: Set<string>) => {
+    if (!input) return;
+    if (Array.isArray(input)) {
+      input.forEach((item) => collectStrings(item, bucket));
+      return;
+    }
+    if (typeof input === 'string') {
+      const trimmed = input.trim();
+      if (trimmed) bucket.add(trimmed);
+      return;
+    }
+    if (typeof input === 'object') {
+      stringKeys.forEach((key) => {
+        if (typeof (input as Record<string, unknown>)[key] !== 'undefined') {
+          collectStrings((input as Record<string, unknown>)[key], bucket);
+        }
+      });
+    }
+  };
+
+  const pickFirstString = (...candidates: unknown[]): string | null => {
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      if (typeof candidate === 'string') {
+        const trimmed = candidate.trim();
+        if (trimmed) return trimmed;
+      } else if (Array.isArray(candidate)) {
+        for (const item of candidate) {
+          const resolved = pickFirstString(item);
+          if (resolved) return resolved;
+        }
+      } else if (typeof candidate === 'object') {
+        const record = candidate as Record<string, unknown>;
+        const resolved = pickFirstString(
+          record.name,
+          record.label,
+          record.value,
+          record.title,
+          record.description,
+          record.text,
+          record.type
+        );
+        if (resolved) return resolved;
+      }
+    }
+    return null;
+  };
+
+  const toUniqueStringArray = (input: unknown): string[] => {
+    const bucket = new Set<string>();
+    collectStrings(input, bucket);
+    return Array.from(bucket);
+  };
+
+  const extractPromptTags = (value: string): string[] => {
+    if (!value) return [];
+    const tokens = value
+      .replace(/[\[\]]/g, ' ')
+      .replace(/\[[^\]]+?\]/g, (match) => {
+        const inner = match.slice(1, -1);
+        const colonIndex = inner.lastIndexOf(':');
+        if (colonIndex > -1) {
+          return inner.slice(0, colonIndex);
+        }
+        return inner;
+      })
+      .split(/[,/\s]+/)
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
+    const unique = new Set<string>();
+    tokens.forEach((token) => {
+      const cleaned = token
+        .replace(/^[0-9.]+$/g, '')
+        .replace(/^(in|with|and|the|for|from|into|over|under|onto|at|by|of)$/i, '')
+        .trim();
+      if (cleaned && cleaned.length > 2) {
+        unique.add(cleaned);
+      }
+    });
+
+    return Array.from(unique).slice(0, 12);
+  };
+
+  const normalizeGenerationMetadata = (gen: any) => {
+    const raw =
+      (gen && typeof gen.metadata === 'object' && gen.metadata) ||
+      gen.promptMetadata ||
+      gen.prompt_metadata ||
+      gen.promptSpec ||
+      {};
+
+    const metadata: Record<string, unknown> = { ...raw };
+
+    const garmentType = pickFirstString(
+      raw.garmentType,
+      raw.garment_type,
+      raw.primary_garment,
+      raw.primaryGarment,
+      raw.garment?.type,
+      raw.garment?.name,
+      raw.garment
+    );
+    if (garmentType) {
+      metadata.garmentType = garmentType;
+    }
+
+    const silhouette = pickFirstString(
+      raw.silhouette,
+      raw.silhouette_type,
+      raw.garment?.silhouette,
+      raw.silhouetteStyle
+    );
+    if (silhouette) {
+      metadata.silhouette = silhouette;
+    }
+
+    const fabric = pickFirstString(
+      raw.fabric,
+      raw.fabric?.material,
+      raw.fabricMaterial,
+      raw.material
+    );
+    if (fabric) {
+      metadata.fabric = fabric;
+    }
+
+    const details = pickFirstString(
+      raw.details,
+      raw.detailing,
+      raw.signatureDetails,
+      raw.design_details,
+      raw.designDetails
+    );
+    if (details) {
+      metadata.details = details;
+    }
+
+    const shot = pickFirstString(
+      raw.shot,
+      raw.shotStyle,
+      raw.camera?.style,
+      raw.camera?.angle,
+      raw.photography?.style,
+      raw.photographyStyle,
+      raw.lighting?.style,
+      raw.background
+    );
+    if (shot) {
+      metadata.shot = shot;
+    }
+
+    const styleTagSet = new Set<string>();
+    collectStrings(
+      [
+        raw.styleTags,
+        raw.style_tags,
+        raw.signature_styles,
+        raw.styleContext,
+        raw.aesthetic,
+        raw.aestheticThemes,
+        raw.signatureAesthetic,
+      ],
+      styleTagSet
+    );
+    const styleTags = Array.from(styleTagSet);
+    if (styleTags.length) {
+      metadata.styleTags = styleTags;
+    }
+
+    const colorSet = new Set<string>();
+    collectStrings(
+      [
+        raw.colors,
+        raw.colorPalette,
+        raw.color_palette,
+        raw.palette,
+        raw.signature_colors,
+        raw.signatureColors,
+        raw.colors?.primary,
+        raw.primaryColors,
+      ],
+      colorSet
+    );
+    const colors = Array.from(colorSet);
+    if (colors.length) {
+      metadata.colors = colors;
+    }
+
+    metadata.generationId = gen?.id || raw.generationId || metadata.generationId;
+    metadata.promptId = gen?.prompt_id || raw.promptId || metadata.promptId;
+
+    if (!metadata.generatedAt) {
+      metadata.generatedAt = gen?.createdAt || gen?.created_at || new Date().toISOString();
+    }
+
+    if (!metadata.spec && raw.spec) {
+      metadata.spec = raw.spec;
+    }
+    if (!metadata.spec && raw.json_spec) {
+      metadata.spec = raw.json_spec;
+    }
+
+    let spec = metadata.spec;
+    if (typeof spec === 'string') {
+      try {
+        spec = JSON.parse(spec);
+        metadata.spec = spec;
+      } catch (error) {
+        spec = undefined;
+      }
+    }
+
+    if (spec && typeof spec === 'object') {
+      const selection = spec.thompson_selection || spec.selection;
+      if (selection) {
+        metadata.garmentType =
+          metadata.garmentType ||
+          pickFirstString(
+            selection.garment?.type,
+            selection.garment?.name,
+            selection.garment
+          );
+        metadata.silhouette =
+          metadata.silhouette || pickFirstString(selection.garment?.silhouette);
+        metadata.fabric =
+          metadata.fabric ||
+          pickFirstString(selection.fabric?.material, selection.fabric?.name);
+        if (!metadata.details && Array.isArray(selection.construction)) {
+          metadata.details = selection.construction.join(', ');
+        }
+        const selectionColors = toUniqueStringArray(selection.colors);
+        if ((!metadata.colors || metadata.colors.length === 0) && selectionColors.length) {
+          metadata.colors = selectionColors;
+        }
+        if (
+          (!metadata.styleTags || metadata.styleTags.length === 0) &&
+          selection.styleContext
+        ) {
+          metadata.styleTags = [selection.styleContext];
+        }
+      }
+
+      const paletteColors = toUniqueStringArray(spec.palette);
+      if ((!metadata.colors || metadata.colors.length === 0) && paletteColors.length) {
+        metadata.colors = paletteColors;
+      }
+    }
+
+    return metadata;
+  };
+
+  const deriveTagsFromMetadata = (metadata: Record<string, unknown>, supplied?: unknown, prompt?: string) => {
+    if (Array.isArray(supplied) && supplied.length > 0) {
+      return Array.from(
+        new Set(
+          supplied
+            .filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0)
+            .map((tag) => tag.trim())
+        )
+      );
+    }
+
+    const tagSet = new Set<string>();
+    const addTag = (value: unknown) => {
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed) tagSet.add(trimmed);
+      }
+    };
+
+    addTag(metadata.garmentType as string);
+    addTag(metadata.silhouette as string);
+    addTag(metadata.fabric as string);
+    addTag(metadata.shot as string);
+    addTag(metadata.details as string);
+
+    if (Array.isArray(metadata.colors)) {
+      metadata.colors.forEach(addTag);
+    }
+    if (Array.isArray(metadata.styleTags)) {
+      metadata.styleTags.forEach(addTag);
+    }
+
+    if (typeof metadata.spec === 'string') {
+      try {
+        metadata.spec = JSON.parse(metadata.spec);
+      } catch (error) {
+        metadata.spec = undefined;
+      }
+    }
+
+    if (metadata.spec && typeof metadata.spec === 'object') {
+      const specSelection = metadata.spec.thompson_selection || metadata.spec.selection;
+      if (specSelection) {
+        collectStrings(specSelection.construction, tagSet);
+        addTag(specSelection.styleContext);
+        toUniqueStringArray(specSelection.colors).forEach(addTag);
+        const specGarment = pickFirstString(
+          specSelection.garment?.type,
+          specSelection.garment?.name,
+          specSelection.garment
+        );
+        addTag(specGarment);
+      }
+      toUniqueStringArray(metadata.spec.palette).forEach(addTag);
+    }
+
+    if (tagSet.size === 0 && typeof prompt === 'string') {
+      extractPromptTags(prompt).forEach(addTag);
+    }
+
+    return Array.from(tagSet);
+  };
+
+  const resolvePromptText = (gen: any) =>
+    pickFirstString(
+      gen?.prompt,
+      gen?.prompt_text,
+      gen?.promptText,
+      gen?.text,
+      gen?.positive_prompt,
+      gen?.metadata?.prompt,
+      gen?.promptMetadata?.prompt,
+      gen?.prompt_metadata?.prompt,
+      gen?.promptMetadata?.positive_prompt,
+      gen?.prompt_metadata?.positive_prompt,
+      gen?.promptMetadata?.renderedPrompt,
+      gen?.prompt_metadata?.renderedPrompt,
+      gen?.promptMetadata?.finalPrompt,
+      gen?.prompt_metadata?.finalPrompt,
+      gen?.metadata?.promptText,
+      gen?.metadata?.positive_prompt,
+      gen?.metadata?.renderedPrompt,
+      gen?.metadata?.spec?.positive_prompt,
+      gen?.metadata?.spec?.prompt,
+      gen?.metadata?.spec?.rendered_prompt,
+      gen?.metadata?.spec?.finalPrompt,
+      gen?.promptSpec?.positive_prompt,
+      gen?.promptSpec?.prompt,
+      gen?.promptSpec?.rendered_prompt,
+      gen?.json_spec?.positive_prompt,
+      gen?.json_spec?.prompt,
+      gen?.json_spec?.rendered_prompt
+    );
 
   React.useEffect(() => {
     if (!currentUser) {
@@ -70,7 +419,7 @@ const Onboarding: React.FC = () => {
       setProgress(20);
 
       const token = authAPI.getToken();
-      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
+      const apiUrl = API_URL;
       
       // Step 1: Upload portfolio ZIP to Podna system
       const uploadUrl = `${apiUrl}/podna/upload`;
@@ -241,22 +590,32 @@ const Onboarding: React.FC = () => {
         console.log('📸 Sample generation:', generations[0]);
         
         // Save generated images to localStorage for Home page
-        const newImages = generations.map((gen: any, idx: number) => ({
-          id: gen.id || `onboard-${Date.now()}-${idx}`,
-          url: gen.url,
-          prompt: gen.prompt_text || gen.text || 'Custom design from your style',
-          timestamp: new Date(),
-          metadata: {
-            generationId: gen.id,
-            promptId: gen.prompt_id,
-            spec: gen.json_spec
-          }
-        }));
+        const newImages = generations.map((gen: any, idx: number) => {
+          const prompt = resolvePromptText(gen);
+          const metadata = normalizeGenerationMetadata(gen);
+          const tags = deriveTagsFromMetadata(metadata, gen.tags, prompt);
+
+          const storedTags = tags.length ? tags : undefined;
+
+          return {
+            id: gen.id || `onboard-${Date.now()}-${idx}`,
+            url: gen.url,
+            prompt,
+            tags: storedTags,
+            origin: 'user',
+            timestamp: gen.createdAt ? new Date(gen.createdAt) : new Date(),
+            metadata
+          };
+        });
         console.log('💾 Saving images to localStorage:', newImages.length);
         console.log('🖼️ First image URL:', newImages[0]?.url);
+        
+        // Save to user-specific key that useGalleryData expects
+        const storageKey = `generatedImages_${userId}`;
+        localStorage.setItem(storageKey, JSON.stringify(newImages));
+        // Also keep the generic key for backwards compatibility
         localStorage.setItem('generatedImages', JSON.stringify(newImages));
-        localStorage.setItem('aiGeneratedImages', JSON.stringify(newImages));
-        console.log('✅ Images saved successfully');
+        console.log('✅ Images saved successfully to', storageKey);
       } else {
         console.warn('⚠️ No images generated, but onboarding will continue');
       }

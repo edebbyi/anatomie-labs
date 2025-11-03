@@ -1300,17 +1300,19 @@ class GenerationService {
     const client = await db.getClient();
     
     try {
+      // Convert cost from dollars to cents for cost_cents column (if cost is provided)
+      const costCents = cost ? Math.round(cost * 100) : null;
+      
       const result = await client.query(`
         UPDATE generations
         SET 
           status = 'completed',
-          cost = $2,
+          cost_cents = $2,
           pipeline_data = $3,
-          completed_at = NOW(),
           updated_at = NOW()
         WHERE id = $1
         RETURNING *
-      `, [generationId, cost, JSON.stringify(metadata)]);
+      `, [generationId, costCents, JSON.stringify(metadata)]);
 
       return {
         ...result.rows[0],

@@ -911,7 +911,7 @@ class PromptTemplateService {
       '{length}': vltSpec.attributes?.length || 'midi',
       '{primary_color}': vltSpec.colors?.primary || 'neutral',
       '{finish}': vltSpec.colors?.finish || 'matte',
-      '{angle}': this._selectRandom(['3/4', 'side', 'front']),
+      '{angle}': this._selectRandom(['3/4 front', 'straight-on', 'front']), // Front-facing only
       '{pose}': this._selectRandom(['confident', 'elegant', 'natural', 'poised']),
       '{background_color}': this._selectRandom(['gray', 'white', 'cream'])
     };

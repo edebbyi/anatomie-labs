@@ -201,7 +201,7 @@ class AdvancedPromptBuilderAgent {
     // Vary photography attributes
     const lightingTypes = ['soft', 'natural', 'studio', 'dramatic'];
     const lightingDirections = ['45deg', 'front', 'side', 'top'];
-    const cameraAngles = ['3/4 front', 'straight-on', 'profile', '3/4 back'];
+    const cameraAngles = ['3/4 front', 'straight-on', 'front view']; // Front-facing only
     const backgrounds = ['clean studio background', 'minimal background', 'neutral background', 'textured background'];
 
 

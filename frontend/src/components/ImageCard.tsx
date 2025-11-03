@@ -1,98 +1,183 @@
-import { Heart, X, Eye } from 'lucide-react';
-import { GeneratedImage } from '../lib/mockData';
+import { Heart, X, Eye, RotateCcw } from 'lucide-react';
 import { useState } from 'react';
 import { Badge } from './ui/badge';
 
-interface ImageCardProps {
-  image: GeneratedImage;
-  onLike: (id: string) => void;
-  onDiscard: (id: string) => void;
-  onView: (image: GeneratedImage) => void;
+type FeedbackState = 'liked' | 'disliked' | null | undefined;
+
+export interface BasicImage {
+  id: string;
+  url: string;
+  prompt?: string;
+  tags?: string[];
+  liked?: boolean;
+  metadata?: Record<string, unknown>;
+  timestamp?: Date | string;
+  origin?: 'user' | 'system' | 'imported';
+  lastInteractedAt?: Date | string;
 }
 
-export function ImageCard({ image, onLike, onDiscard, onView }: ImageCardProps) {
+interface ImageCardProps {
+  image: BasicImage & { archived?: boolean };
+  onClick?: () => void;
+  onView?: (image: BasicImage) => void;
+  onLike?: (id: string) => void;
+  onDislike?: (id: string) => void;
+  onDiscard?: (id: string) => void;
+  onUnarchive?: (id: string) => void;
+  feedback?: FeedbackState;
+  size?: 'small' | 'large';
+}
+
+const ImageCard: React.FC<ImageCardProps> = ({
+  image,
+  onClick,
+  onView,
+  onLike,
+  onDislike,
+  onDiscard,
+  onUnarchive,
+  feedback,
+  size = 'large'
+}) => {
   const [isHovered, setIsHovered] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
 
+  const handleCardClick = () => {
+    if (onClick) {
+      onClick();
+    } else if (onView) {
+      onView(image);
+    }
+  };
+
+  const handleLike = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    onLike?.(image.id);
+  };
+
+  const handleDislike = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (onDislike) {
+      onDislike(image.id);
+    } else {
+      onDiscard?.(image.id);
+    }
+  };
+
+  const handleView = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    onView?.(image);
+  };
+
+  const handleUnarchive = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    onUnarchive?.(image.id);
+  };
+
+  const isLiked = feedback === 'liked' || image.liked;
+  const isDisliked = feedback === 'disliked';
+
   return (
     <div
-      className="relative cursor-pointer group overflow-hidden rounded-lg"
+      className={`relative cursor-pointer group overflow-hidden rounded-lg ${
+        size === 'small' ? 'aspect-square' : 'h-full'
+      }`}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
-      onClick={() => onView(image)}
+      onClick={handleCardClick}
     >
-      {/* Skeleton loader */}
-      {!imageLoaded && (
-        <div className="absolute inset-0 bg-gray-200 animate-pulse" />
-      )}
-      
-      {/* Image */}
+      {!imageLoaded && <div className="absolute inset-0 bg-gray-200 animate-pulse" />}
+
       <img
         src={image.url}
-        alt={image.prompt}
-        className={`w-full h-auto block transition-opacity duration-200 ${
+        alt={image.prompt || 'Generated design'}
+        className={`w-full h-full object-cover transition-opacity duration-200 ${
           imageLoaded ? 'opacity-100' : 'opacity-0'
         }`}
         onLoad={() => setImageLoaded(true)}
       />
 
-      {/* Overlay on hover */}
-      {isHovered && (
+      {(isHovered || isLiked || isDisliked) && (
         <div className="absolute inset-0 bg-black/50 transition-opacity duration-200 flex flex-col items-center justify-center gap-4">
-          {/* Action buttons */}
           <div className="flex gap-4">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onLike(image.id);
-              }}
-              className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 ${
-                image.liked
-                  ? 'bg-[#ec4899] text-white'
-                  : 'bg-white/90 text-gray-800 hover:bg-white hover:scale-110'
-              }`}
-            >
-              <Heart className={`w-5 h-5 ${image.liked ? 'fill-current' : ''}`} />
-            </button>
-            
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDiscard(image.id);
-              }}
-              className="w-12 h-12 rounded-full bg-white/90 text-gray-800 hover:bg-white hover:scale-110 flex items-center justify-center transition-all duration-200"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onView(image);
-              }}
-              className="w-12 h-12 rounded-full bg-white/90 text-gray-800 hover:bg-white hover:scale-110 flex items-center justify-center transition-all duration-200"
-            >
-              <Eye className="w-5 h-5" />
-            </button>
+            {image.archived && onUnarchive ? (
+              <>
+                <button
+                  onClick={handleUnarchive}
+                  className="w-12 h-12 rounded-full bg-white/90 text-gray-800 hover:bg-white hover:scale-110 flex items-center justify-center transition-all duration-200"
+                  aria-label="Restore from archive"
+                >
+                  <RotateCcw className="w-5 h-5" />
+                </button>
+
+                {onView && (
+                  <button
+                    onClick={handleView}
+                    className="w-12 h-12 rounded-full bg-white/90 text-gray-800 hover:bg-white hover:scale-110 flex items-center justify-center transition-all duration-200"
+                    aria-label="View details"
+                  >
+                    <Eye className="w-5 h-5" />
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                {onLike && (
+                  <button
+                    onClick={handleLike}
+                    className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 ${
+                      isLiked
+                        ? 'bg-[#ec4899] text-white'
+                        : 'bg-white/90 text-gray-800 hover:bg-white hover:scale-110'
+                    }`}
+                    aria-label="Like"
+                  >
+                    <Heart className={`w-5 h-5 ${isLiked ? 'fill-current' : ''}`} />
+                  </button>
+                )}
+
+                {(onDislike || onDiscard) && (
+                  <button
+                    onClick={handleDislike}
+                    className={`w-12 h-12 rounded-full bg-white/90 text-gray-800 hover:bg-white hover:scale-110 flex items-center justify-center transition-all duration-200 ${
+                      isDisliked ? 'ring-2 ring-red-500' : ''
+                    }`}
+                    aria-label="Dislike"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                )}
+
+                {onView && (
+                  <button
+                    onClick={handleView}
+                    className="w-12 h-12 rounded-full bg-white/90 text-gray-800 hover:bg-white hover:scale-110 flex items-center justify-center transition-all duration-200"
+                    aria-label="View details"
+                  >
+                    <Eye className="w-5 h-5" />
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}
 
-      {/* Tags at bottom */}
-      <div className="absolute bottom-3 left-3 flex flex-wrap gap-1.5">
-        {image.tags.slice(0, 3).map((tag, index) => (
-          <Badge
-            key={index}
-            variant="secondary"
-            className="bg-white/90 text-gray-800 backdrop-blur-sm text-xs px-2 py-0.5"
-          >
-            {tag}
-          </Badge>
-        ))}
-      </div>
+      {image.tags && image.tags.length > 0 && (
+        <div className="absolute bottom-3 left-3 flex flex-wrap gap-1.5">
+          {image.tags.slice(0, 3).map((tag, index) => (
+            <Badge
+              key={`${image.id}-tag-${index}`}
+              variant="secondary"
+              className="bg-white/90 text-gray-800 backdrop-blur-sm text-xs px-2 py-0.5"
+            >
+              {tag}
+            </Badge>
+          ))}
+        </div>
+      )}
 
-      {/* Liked indicator */}
-      {image.liked && (
+      {isLiked && (
         <div className="absolute top-3 right-3">
           <div className="w-8 h-8 rounded-full bg-[#ec4899] flex items-center justify-center shadow-lg">
             <Heart className="w-4 h-4 text-white fill-current" />
@@ -101,4 +186,6 @@ export function ImageCard({ image, onLike, onDiscard, onView }: ImageCardProps) 
       )}
     </div>
   );
-}
+};
+
+export default ImageCard;

@@ -449,7 +449,7 @@ const Generation: React.FC = () => {
             </div>
             <div className="flex gap-2">
               <button
-                onClick={() => navigate('/gallery')}
+                onClick={() => navigate('/pods')}
                 className="px-4 py-2 text-sm font-medium text-anatomie-accent border border-anatomie-accent rounded-lg hover:bg-anatomie-accent hover:text-white transition-all"
               >
                 View in Gallery
@@ -493,7 +493,7 @@ const Generation: React.FC = () => {
                       Dislike
                     </button>
                     <button
-                      onClick={() => navigate('/gallery')}
+                      onClick={() => navigate('/pods')}
                       className="px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-all"
                       title="View in gallery"
                     >

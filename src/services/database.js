@@ -10,7 +10,9 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD || '',
   max: 20, // Maximum number of clients in the pool
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  connectionTimeoutMillis: 10000, // Increased from 2000ms to 10000ms
+  query_timeout: 30000, // Add query timeout of 30 seconds
+  statement_timeout: 30000, // Add statement timeout of 30 seconds
 });
 
 // Pool error handler
@@ -61,8 +63,8 @@ const getClient = async () => {
   
   // Set a timeout to release
   const timeout = setTimeout(() => {
-    logger.error('A client has been checked out for more than 5 seconds!');
-  }, 5000);
+    logger.error('A client has been checked out for more than 30 seconds!');
+  }, 30000);
   
   // Monkey patch the query method to track queries
   client.query = (...args) => {
