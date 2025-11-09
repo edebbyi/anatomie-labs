@@ -2,15 +2,13 @@ services:
   # PostgreSQL Database
   - type: pserv
     name: anatomie-labs-db
-    plan: free
     databaseName: anatomie_labs
     databaseUser: anatomie_user
 
   # Node.js Backend API
   - type: web
     name: anatomie-labs-backend
-    runtime: node
-    plan: free
+    env: node
     buildCommand: npm install
     startCommand: node server.js
     healthCheckPath: /health
@@ -23,33 +21,18 @@ services:
         fromDatabase:
           name: anatomie-labs-db
           property: connectionString
-      - key: CLIENT_URL
-        sync: false  # Set this in Render dashboard to your Netlify URL
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_EXPIRE_TIME
         value: 7d
-      # Add your API keys in Render dashboard:
-      # - OPENAI_API_KEY
-      # - ANTHROPIC_API_KEY
-      # - VLT_API_KEY
-      # - AIRTABLE_API_KEY
-      # - AIRTABLE_BASE_ID
-      # - R2_ACCESS_KEY_ID
-      # - R2_SECRET_ACCESS_KEY
-      # - R2_BUCKET_NAME
-      # - R2_ENDPOINT
-      # - R2_CDN_URL
 
   # Python Agents Service (optional)
   - type: web
     name: anatomie-labs-agents
-    runtime: python
-    plan: free
+    env: python
     buildCommand: pip install -r agents-service/requirements.txt
     startCommand: cd agents-service && uvicorn main:app --host 0.0.0.0 --port 8000
     healthCheckPath: /health
     envVars:
       - key: PORT
         value: 8000
-      # Add your API keys in Render dashboard
