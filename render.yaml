@@ -23,8 +23,6 @@ services:
         fromDatabase:
           name: anatomie-labs-db
           property: connectionString
-      - key: CLIENT_URL
-        sync: false  # Set this in Render dashboard to your Netlify URL
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_EXPIRE_TIME
