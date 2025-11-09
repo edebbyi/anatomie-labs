@@ -1,7 +1,10 @@
 [build]
+  command = "cd frontend && npm install && npm run build"
+  publish = "frontend/dist"
   functions = "netlify/functions"
 
 [dev]
+  command = "npm install && npm run dev"
   functions = "netlify/functions"
   targetPort = 8888
   port = 8888
