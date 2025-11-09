@@ -1,6 +1,6 @@
 [build]
   command = "cd frontend && npm install && npm run build"
-  publish = "frontend/build"
+  publish = "frontend/dist"
   functions = "netlify/functions"
 
 [dev]
@@ -8,3 +8,9 @@
   functions = "netlify/functions"
   targetPort = 8888
   port = 8888
+
+# Environment variables needed (set in Netlify dashboard):
+# VITE_API_URL=https://your-backend.onrender.com/api
+# VITE_AGENTS_API_URL=https://your-agents.onrender.com
+# AIRTABLE_API_KEY=your_key
+# BASE_ID=your_base_id
