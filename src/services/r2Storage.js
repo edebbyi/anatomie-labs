@@ -1,3 +1,24 @@
+async testConnection() {
+  try {
+    console.log('==> R2 Test Connection Details:');
+    console.log('  Bucket:', this.bucket);
+    console.log('  Endpoint:', process.env.R2_ENDPOINT);
+    console.log('  Access Key ID:', process.env.R2_ACCESS_KEY_ID ? 'SET' : 'NOT SET');
+    console.log('  Secret Access Key:', process.env.R2_SECRET_ACCESS_KEY ? 'SET' : 'NOT SET');
+    
+    const command = new HeadBucketCommand({ Bucket: this.bucket });
+    await this.s3Client.send(command);
+    logger.info('R2 connection test successful');
+    return true;
+  } catch (error) {
+    console.error('==> R2 connection test FAILED:', error.message);
+    console.error('==> Full error:', error);
+    logger.error('R2 connection test failed', { error: error.message });
+    return false;
+  }
+}
+
+
 const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, HeadBucketCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { v4: uuidv4 } = require('uuid');
