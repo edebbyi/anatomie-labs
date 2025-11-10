@@ -5,40 +5,121 @@ console.log('==> DATABASE_URL exists:', !!process.env.DATABASE_URL);
 console.log('==> About to require modules...');
 
 const express = require('express');
+console.log('✓ express loaded');
 const cors = require('cors');
+console.log('✓ cors loaded');
 const helmet = require('helmet');
+console.log('✓ helmet loaded');
 const rateLimit = require('express-rate-limit');
+console.log('✓ rateLimit loaded');
 const path = require('path');
+console.log('✓ path loaded');
 const fs = require('fs');
+console.log('✓ fs loaded');
 const http = require('http');
+console.log('✓ http loaded');
 const socketIo = require('socket.io');
+console.log('✓ socketIo loaded');
 require('dotenv').config();
+console.log('✓ dotenv loaded');
+
+// Create logs directory if it doesn't exist
+console.log('==> Creating logs directory...');
+const logsDir = path.join(__dirname, 'logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+  console.log('✓ logs directory created');
+} else {
+  console.log('✓ logs directory exists');
+}
 
 // Import middleware and routes
+console.log('==> Loading authMiddleware...');
 const { authMiddleware } = require('./src/middleware/auth');
+console.log('✓ authMiddleware loaded');
+
+console.log('==> Loading errorHandler...');
 const { errorHandler } = require('./src/middleware/errorHandler');
+console.log('✓ errorHandler loaded');
+
+console.log('==> Loading logger...');
 const logger = require('./src/utils/logger');
+console.log('✓ logger loaded');
+
+console.log('==> Loading database service...');
 const db = require('./src/services/database');
+console.log('✓ database service loaded');
+
+console.log('==> Loading redis service...');
 const redis = require('./src/services/redis');
+console.log('✓ redis service loaded');
+
+console.log('==> Loading r2Storage service...');
 const r2Storage = require('./src/services/r2Storage');
+console.log('✓ r2Storage service loaded');
+
+console.log('==> Loading archiveCleanupService...');
 const archiveCleanupService = require('./src/services/archiveCleanupService');
+console.log('✓ archiveCleanupService loaded');
 
 // Import API routes
+console.log('==> Loading authRoutes...');
 const authRoutes = require('./src/api/routes/auth');
+console.log('✓ authRoutes loaded');
+
+console.log('==> Loading voiceRoutes...');
 const voiceRoutes = require('./src/api/routes/voice');
+console.log('✓ voiceRoutes loaded');
+
+console.log('==> Loading imageRoutes...');
 const imageRoutes = require('./src/api/routes/images');
+console.log('✓ imageRoutes loaded');
+
+console.log('==> Loading feedbackRoutes...');
 const feedbackRoutes = require('./src/api/routes/feedback');
+console.log('✓ feedbackRoutes loaded');
+
+console.log('==> Loading analyticsRoutes...');
 const analyticsRoutes = require('./src/api/routes/analytics');
+console.log('✓ analyticsRoutes loaded');
+
+console.log('==> Loading vltRoutes...');
 const vltRoutes = require('./src/api/routes/vlt');
-// const promptRoutes = require('./src/api/routes/prompt');
+console.log('✓ vltRoutes loaded');
+
+console.log('==> Loading personaRoutes...');
 const personaRoutes = require('./src/api/routes/persona');
+console.log('✓ personaRoutes loaded');
+
+console.log('==> Loading generationRoutes...');
 const generationRoutes = require('./src/routes/generation');
+console.log('✓ generationRoutes loaded');
+
+console.log('==> Loading rlhfRoutes...');
 const rlhfRoutes = require('./src/api/routes/rlhf');
+console.log('✓ rlhfRoutes loaded');
+
+console.log('==> Loading styleClusteringRoutes...');
 const styleClusteringRoutes = require('./src/routes/styleClusteringRoutes');
+console.log('✓ styleClusteringRoutes loaded');
+
+console.log('==> Loading agentsRoutes...');
 const agentsRoutes = require('./src/api/routes/agents');
+console.log('✓ agentsRoutes loaded');
+
+console.log('==> Loading podnaRoutes...');
 const podnaRoutes = require('./src/api/routes/podna');
+console.log('✓ podnaRoutes loaded');
+
+console.log('==> Loading podsRoutes...');
 const podsRoutes = require('./src/api/routes/pods');
+console.log('✓ podsRoutes loaded');
+
+console.log('==> Loading modelGenderRoutes...');
 const modelGenderRoutes = require('./src/api/routes/modelGenderRoutes');
+console.log('✓ modelGenderRoutes loaded');
+
+console.log('==> All modules loaded successfully!');
 
 // CORS configuration - Allow multiple frontend ports
 const allowedOrigins = [
@@ -226,13 +307,12 @@ const PORT = process.env.PORT || 3001;
 // Initialize database and start server
 const startServer = async () => {
   try {
+    console.log('==> Starting server initialization...');
+    
     // Test database connection
+    console.log('==> Testing database connection...');
     const dbConnected = await db.testConnection();
     if (!dbConnected) {
-      // In development it's helpful to allow the server to start even if
-      // the database isn't available (so frontend work and static hosting
-      // can continue). To override the exit behavior set NODE_ENV=development
-      // or set SKIP_SERVICE_CHECKS=1 in your environment.
       if (process.env.NODE_ENV === 'development' || process.env.SKIP_SERVICE_CHECKS === '1') {
         logger.warn('Database connection failed, but continuing because NODE_ENV=development or SKIP_SERVICE_CHECKS=1');
       } else {
@@ -240,15 +320,19 @@ const startServer = async () => {
         process.exit(1);
       }
     }
+    console.log('✓ Database connection tested');
 
     // Connect to Redis
+    console.log('==> Connecting to Redis...');
     await redis.connect();
     const redisConnected = await redis.testConnection();
     if (!redisConnected) {
       logger.warn('Redis connection failed. Continuing without cache...');
     }
+    console.log('✓ Redis connection tested');
 
     // Test R2 storage connection
+    console.log('==> Testing R2 storage...');
     const r2Configured = r2Storage.isConfigured();
     let r2Connected = false;
     if (r2Configured) {
@@ -256,6 +340,7 @@ const startServer = async () => {
     } else {
       logger.warn('R2 storage not configured. Image upload will be unavailable.');
     }
+    console.log('✓ R2 storage tested');
 
     // Start server
     logger.info(`About to start server on port ${PORT}...`);
@@ -316,6 +401,7 @@ const startServer = async () => {
       }
     });
 
+    console.log('==> About to listen on port', PORT);
     server.listen(PORT, () => {
       logger.info(`🚀 Designer BFF Server running on port ${PORT}`);
       logger.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
@@ -326,6 +412,7 @@ const startServer = async () => {
       logger.info(`💾 DB Pool: ${JSON.stringify(db.getPoolStats())}`);
     });
   } catch (error) {
+    console.error('FATAL ERROR in startServer:', error);
     logger.error('Failed to start server', { error: error.message });
     process.exit(1);
   }
