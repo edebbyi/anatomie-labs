@@ -5,15 +5,130 @@ services:
     buildCommand: npm install
     startCommand: node server.js
     envVars:
+      # Core Configuration
       - key: NODE_ENV
         value: production
+      
+      # Database - Connected to Render Postgres
       - key: DATABASE_URL
         fromDatabase:
           name: anatomie-labs-db
           property: connectionString
+      - key: DB_NAME
+        value: anatomie_labs
+      - key: DB_HOST
+        fromDatabase:
+          name: anatomie-labs-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: anatomie-labs-db
+          property: port
+      - key: DB_USER
+        fromDatabase:
+          name: anatomie-labs-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: anatomie-labs-db
+          property: password
+      
+      # Redis - Connected to Render Redis
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: anatomie-labs-redis
+          property: connectionString
+      - key: REDIS_PASSWORD
+        value: ""
+      
+      # JWT Configuration
+      - key: JWT_SECRET
+        generateValue: true
       - key: JWT_EXPIRE_TIME
         value: 7d
+      
+      # VLT API Configuration
+      - key: VLT_API_URL
+        value: https://visual-descriptor-516904417440.us-central1.run.app
+      - key: VLT_API_KEY
+        sync: false
+      - key: VLT_DEFAULT_MODEL
+        value: gemini
+      - key: VLT_DEFAULT_PASSES
+        value: A,B,C
+      - key: VLT_USE_REPLICATE
+        value: "true"
+      
+      # Replicate API
+      - key: REPLICATE_API_TOKEN
+        sync: false
+      
+      # Cloudflare R2 Storage
+      - key: R2_ENDPOINT
+        value: https://729882d04124e4fac23a81ccc54f11fa.r2.cloudflarestorage.com
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        value: designer-bff-images
+      - key: R2_CDN_URL
+        value: https://pub-729882d04124e4fac23a81ccc54f11fa.r2.dev
+      - key: R2_USE_SIGNED_URLS
+        value: "true"
+      
+      # OpenAI Configuration
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4
+      - key: OPENAI_VISION_MODEL
+        value: gpt-4-vision-preview
+      
+      # Anthropic Configuration
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      
+      # File Upload Configuration
+      - key: MAX_FILE_SIZE
+        value: 50mb
+      - key: UPLOAD_DIR
+        value: public/uploads
+      - key: ALLOWED_IMAGE_TYPES
+        value: jpg,jpeg,png,gif,webp
+      
+      # Logging
+      - key: LOG_LEVEL
+        value: info
+      - key: LOG_FILE
+        value: logs/app.log
+      
+      # Rate Limiting
+      - key: RATE_LIMIT_WINDOW_MS
+        value: "900000"
+      - key: RATE_LIMIT_MAX
+        value: "100"
+      
+      # Feature Flags
+      - key: VOICE_COMMANDS_ENABLED
+        value: "true"
+      - key: REAL_TIME_GENERATION
+        value: "true"
+      - key: MULTI_USER_COLLABORATION
+        value: "true"
+      
+      # Client URL - UPDATE THIS WITH YOUR ACTUAL FRONTEND URL
+      - key: CLIENT_URL
+        value: https://your-frontend-app.onrender.com
 
+  # Redis Service
+  - type: redis
+    name: anatomie-labs-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+
+# PostgreSQL Database
 databases:
   - name: anatomie-labs-db
     databaseName: anatomie_labs
