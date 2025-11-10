@@ -1,9 +1,4 @@
 services:
-  - type: postgres
-    name: anatomie-labs-db
-    databaseName: anatomie_labs
-    databaseUser: anatomie_user
-
   - type: web
     name: anatomie-labs-backend
     env: node
@@ -12,5 +7,15 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: anatomie-labs-db
+          property: connectionString
       - key: JWT_EXPIRE_TIME
         value: 7d
+
+databases:
+  - name: anatomie-labs-db
+    databaseName: anatomie_labs
+    user: anatomie_user
+    plan: free
