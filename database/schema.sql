@@ -1,9 +1,10 @@
 -- Designer BFF Database Schema
 -- PostgreSQL 14+
 
--- Enable UUID extension
+-- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "vector"; -- For ML embeddings and vector similarity search
 
 -- Users table
 CREATE TABLE users (
