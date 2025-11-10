@@ -333,11 +333,31 @@ const startServer = async () => {
 
     // Test R2 storage connection
     console.log('==> Testing R2 storage...');
+    console.log('==> R2 Environment Variables Check:');
+    console.log('  - R2_ENDPOINT:', process.env.R2_ENDPOINT || 'NOT SET');
+    console.log('  - R2_ACCESS_KEY_ID exists:', !!process.env.R2_ACCESS_KEY_ID);
+    console.log('  - R2_ACCESS_KEY_ID value:', process.env.R2_ACCESS_KEY_ID ? `${process.env.R2_ACCESS_KEY_ID.substring(0, 8)}...` : 'NOT SET');
+    console.log('  - R2_SECRET_ACCESS_KEY exists:', !!process.env.R2_SECRET_ACCESS_KEY);
+    console.log('  - R2_SECRET_ACCESS_KEY value:', process.env.R2_SECRET_ACCESS_KEY ? `${process.env.R2_SECRET_ACCESS_KEY.substring(0, 8)}...` : 'NOT SET');
+    console.log('  - R2_BUCKET_NAME:', process.env.R2_BUCKET_NAME || 'NOT SET');
+    console.log('  - R2_CDN_URL:', process.env.R2_CDN_URL || 'NOT SET');
+    console.log('  - R2_USE_SIGNED_URLS:', process.env.R2_USE_SIGNED_URLS || 'NOT SET');
+    
     const r2Configured = r2Storage.isConfigured();
+    console.log('==> r2Storage.isConfigured():', r2Configured);
+    
     let r2Connected = false;
     if (r2Configured) {
-      r2Connected = await r2Storage.testConnection();
+      console.log('==> R2 is configured, attempting connection test...');
+      try {
+        r2Connected = await r2Storage.testConnection();
+        console.log('==> R2 connection test result:', r2Connected);
+      } catch (error) {
+        console.error('==> R2 connection test threw error:', error.message);
+        console.error('==> Full R2 error:', error);
+      }
     } else {
+      console.log('==> R2 is NOT configured - skipping connection test');
       logger.warn('R2 storage not configured. Image upload will be unavailable.');
     }
     console.log('✓ R2 storage tested');
