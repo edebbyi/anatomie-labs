@@ -234,14 +234,21 @@ app.use('/api/model-gender', authMiddleware, modelGenderRoutes); // Model gender
 app.get('/health', async (req, res) => {
   // const pineconeService = require('./src/services/pineconeService');
   
-  const services = {
-    database: await db.testConnection(),
-    redis: await redis.testConnection(),
-    r2Storage: r2Storage.isConfigured() && await r2Storage.testConnection(),
-    pinecone: false // Temporarily disabled
+  //const services = {
+   // database: await db.testConnection(),
+   // redis: await redis.testConnection(),
+   // r2Storage: r2Storage.isConfigured() && await r2Storage.testConnection(),
+  //  pinecone: false // Temporarily disabled
+  //};
+
+    // Only check active services (exclude pinecone since it's disabled)
+  const activeServices = {
+    database: services.database,
+    redis: services.redis,
+    r2Storage: services.r2Storage
   };
   
-  const allHealthy = Object.values(services).every(s => s);
+  const allHealthy = Object.values(activeServices).every(s => s);
   
   res.status(allHealthy ? 200 : 503).json({ 
     status: allHealthy ? 'healthy' : 'degraded', 
