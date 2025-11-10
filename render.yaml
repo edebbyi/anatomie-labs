@@ -1,4 +1,9 @@
 services:
+  - type: postgres
+    name: anatomie-labs-db
+    databaseName: anatomie_labs
+    databaseUser: anatomie_user
+
   - type: web
     name: anatomie-labs-backend
     env: node
@@ -17,5 +22,5 @@ services:
 databases:
   - name: anatomie-labs-db
     databaseName: anatomie_labs
-    databaseUser: anatomie_user
+    user: anatomie_user
     plan: free
