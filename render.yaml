@@ -1,5 +1,5 @@
 services:
-  - type: pserv
+  - type: postgres
     name: anatomie-labs-db
     databaseName: anatomie_labs
     databaseUser: anatomie_user
