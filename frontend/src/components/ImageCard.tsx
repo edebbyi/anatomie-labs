@@ -42,6 +42,17 @@ const ImageCard: React.FC<ImageCardProps> = ({
   const [isHovered, setIsHovered] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
 
+  const handleImageError = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const el = e.currentTarget as HTMLImageElement & { dataset?: Record<string, string> };
+    if (el.dataset && el.dataset.fallbackApplied === 'true') return;
+    if (el.dataset) el.dataset.fallbackApplied = 'true';
+    // Fallback placeholder to avoid showing long prompt text as alt content
+    el.src = 'data:image/svg+xml;utf8,' +
+      encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600"><rect width="100%" height="100%" fill="#e5e7eb"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#9ca3af" font-family="system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial" font-size="24">Image unavailable</text></svg>`
+      );
+  };
+
   const handleCardClick = () => {
     if (onClick) {
       onClick();
@@ -79,7 +90,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
 
   return (
     <div
-      className={`relative cursor-pointer group overflow-hidden rounded-lg ${
+      className={`relative w-full cursor-pointer group overflow-hidden rounded-lg ${
         size === 'small' ? 'aspect-square' : 'h-full'
       }`}
       onMouseEnter={() => setIsHovered(true)}
@@ -90,11 +101,12 @@ const ImageCard: React.FC<ImageCardProps> = ({
 
       <img
         src={image.url}
-        alt={image.prompt || 'Generated design'}
+        alt={image.prompt ? 'Generated design' : ''}
         className={`w-full h-full object-cover transition-opacity duration-200 ${
           imageLoaded ? 'opacity-100' : 'opacity-0'
         }`}
         onLoad={() => setImageLoaded(true)}
+        onError={handleImageError}
       />
 
       {(isHovered || isLiked || isDisliked) && (

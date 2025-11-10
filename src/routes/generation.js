@@ -108,11 +108,24 @@ router.post('/generate', async (req, res) => {
       }
     });
 
+    // Normalize assets to always include a usable URL field
+    const normalizedAssets = Array.isArray(result?.assets)
+      ? result.assets.map((a) => ({
+          id: a.id,
+          url: a.url || a.cdnUrl || a.cdn_url,
+          cdnUrl: a.cdnUrl || a.cdn_url || a.url,
+          createdAt: a.createdAt || a.created_at || new Date().toISOString(),
+          metadata: a.metadata || null,
+          prompt: a.prompt || a.prompt_text || a.promptText,
+          tags: Array.isArray(a.tags) ? a.tags : undefined,
+        }))
+      : [];
+
     res.json({
       success: true,
-      assets: result.assets,
-      generation: result.generation,
-      metadata: result.metadata
+      assets: normalizedAssets,
+      generation: result.generation || result,
+      metadata: result.metadata || result.pipeline_data || null
     });
 
   } catch (error) {

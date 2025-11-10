@@ -44,6 +44,65 @@ const pickFirstString = (...candidates) => {
 
 class ImageGenerationAgent {
   /**
+   * Normalize provider names coming from various clients to match supported adapters
+   * @param {string} provider - Raw provider identifier
+   * @returns {string} Normalized provider identifier
+   */
+  normalizeProvider(provider) {
+    const fallbackProvider = 'imagen-4-ultra';
+
+    if (!provider) {
+      return fallbackProvider;
+    }
+
+    const raw = String(provider).trim();
+    if (!raw) {
+      return fallbackProvider;
+    }
+
+    const normalized = raw.toLowerCase();
+    const alias = normalized.replace(/[\s_]+/g, '-');
+
+    if (
+      alias === 'imagen-4-ultra' ||
+      alias === 'imagen-4' ||
+      alias === 'imagen4-ultra' ||
+      alias === 'imagen4' ||
+      alias === 'imagen' ||
+      alias === 'google-imagen' ||
+      alias === 'google-imagen-4' ||
+      alias === 'google-imagen-4-ultra'
+    ) {
+      return 'imagen-4-ultra';
+    }
+
+    if (
+      alias === 'stable-diffusion' ||
+      alias === 'stable-diffusion-xl' ||
+      alias === 'stable-diffusionxl' ||
+      alias === 'stable-diffusion-1' ||
+      alias === 'sdxl'
+    ) {
+      return 'stable-diffusion';
+    }
+
+    if (
+      alias === 'dalle' ||
+      alias === 'dall-e' ||
+      alias === 'dalle-3' ||
+      alias === 'dall-e-3'
+    ) {
+      logger.warn('Unsupported provider requested, falling back to Imagen-4 Ultra', {
+        requestedProvider: raw,
+        fallbackProvider
+      });
+      return fallbackProvider;
+    }
+
+    return raw;
+  }
+
+  /**
    * Generate image from prompt
    * @param {string} userId - User ID
    * @param {string} promptId - Prompt ID
@@ -58,10 +117,13 @@ class ImageGenerationAgent {
       height = 1024
     } = options;
 
+    const normalizedProvider = this.normalizeProvider(provider);
+
     logger.info('Image Generation Agent: Starting generation', { 
       userId, 
       promptId, 
-      provider 
+      provider: normalizedProvider,
+      requestedProvider: provider
     });
 
     // Get prompt
@@ -78,13 +140,14 @@ class ImageGenerationAgent {
       let costCents;
       let params;
 
-      if (provider === 'imagen-4-ultra') {
+      let providerUrl = null;
+
+      if (normalizedProvider === 'imagen-4-ultra') {
         const result = await this.generateWithImagen(prompt.text, width, height);
         // Imagen-4 Ultra returns buffer directly
         if (result.buffer) {
           imageBuffer = result.buffer;
         } else if (result.url) {
-          // Fallback for development mock
           imageBuffer = await this.downloadImage(result.url);
         } else {
           throw new Error('No buffer or URL returned from Imagen-4 Ultra');
@@ -92,7 +155,8 @@ class ImageGenerationAgent {
         seed = result.seed;
         costCents = result.costCents;
         params = result.params;
-      } else if (provider === 'stable-diffusion') {
+        providerUrl = result.url || null;
+      } else if (normalizedProvider === 'stable-diffusion') {
         const result = await this.generateWithStableDiffusion(prompt.text, width, height);
         // Also returns buffer now (redirects to Imagen)
         if (result.buffer) {
@@ -105,24 +169,55 @@ class ImageGenerationAgent {
         seed = result.seed;
         costCents = result.costCents;
         params = result.params;
+        providerUrl = result.url || null;
       } else {
-        throw new Error(`Unsupported provider: ${provider}`);
+        throw new Error(`Unsupported provider: ${normalizedProvider}`);
       }
 
-      // Upload buffer to R2
-      const uploadResult = await r2Storage.uploadImage(imageBuffer, {
-        userId,
-        imageType: 'generated',
-        format: 'jpg'
-      });
+      let uploadResult = null;
+      let cdnUrl = null;
+      let r2Key = null;
+
+      if (r2Storage.isConfigured()) {
+        try {
+          uploadResult = await r2Storage.uploadImage(imageBuffer, {
+            userId,
+            imageType: 'generated',
+            format: 'jpg'
+          });
+          cdnUrl = uploadResult.cdnUrl;
+          r2Key = uploadResult.key;
+        } catch (uploadError) {
+          logger.warn('Image Generation Agent: R2 upload failed, using provider URL', {
+            userId,
+            promptId,
+            error: uploadError.message
+          });
+        }
+      } else {
+        logger.warn('Image Generation Agent: R2 not configured, using provider URL', {
+          userId,
+          promptId
+        });
+      }
+
+      if (!cdnUrl) {
+        if (providerUrl) {
+          cdnUrl = providerUrl;
+        } else if (imageBuffer) {
+          cdnUrl = `data:image/jpeg;base64,${imageBuffer.toString('base64')}`;
+        } else {
+          throw new Error('Unable to determine CDN URL for generated image');
+        }
+      }
 
       // Save generation record
       const generation = await this.saveGeneration(userId, promptId, {
-        url: uploadResult.cdnUrl,
-        r2_key: uploadResult.key,
+        url: cdnUrl,
+        r2_key: r2Key,
         width,
         height,
-        provider,
+        provider: normalizedProvider,
         params,
         seed,
         cost_cents: costCents,
@@ -137,7 +232,7 @@ class ImageGenerationAgent {
       const generationTime = Date.now() - startTime;
       logger.info('Image Generation Agent: Generation complete', { 
         generationId: generation.id,
-        provider,
+        provider: normalizedProvider,
         costCents,
         generationTimeMs: generationTime
       });
@@ -201,57 +296,146 @@ class ImageGenerationAgent {
         logger.info('Async iterator consumed', { resultCount: results.length });
       }
 
+      const firstItem = Array.isArray(output) && output.length > 0 ? output[0] : null;
+
       logger.info('Replicate API response received', { 
         outputType: typeof output,
         isArray: Array.isArray(output),
-        outputLength: Array.isArray(output) ? output.length : 'N/A'
+        outputLength: Array.isArray(output) ? output.length : 'N/A',
+        firstItemType: firstItem ? typeof firstItem : null,
+        firstItemKeys: firstItem && typeof firstItem === 'object'
+          ? Object.keys(firstItem).slice(0, 6)
+          : undefined
       });
 
       // Cost for Imagen-4 Ultra via Replicate: ~$0.02 per image
       const costCents = 2;
 
-      // Imagen-4 Ultra returns raw image data as Uint8Array, not a URL
-      // We need to convert the Uint8Array chunks to a Buffer
-      let imageBuffer;
-      
-      if (Array.isArray(output) && output.length > 0) {
-        // Check if we have Uint8Array chunks
-        if (output[0] instanceof Uint8Array) {
-          logger.info('Converting Uint8Array chunks to Buffer', { chunkCount: output.length });
-          
-          // Calculate total length
-          const totalLength = output.reduce((sum, chunk) => sum + chunk.length, 0);
-          
-          // Combine all chunks into a single buffer
-          imageBuffer = Buffer.concat(output.map(chunk => Buffer.from(chunk)));
-          
-          logger.info('Image buffer created', { 
-            sizeKB: (imageBuffer.length / 1024).toFixed(2),
-            totalChunks: output.length 
-          });
-        } else if (typeof output[0] === 'string') {
-          // If it's a URL string, handle as before
-          const imageUrl = output[0];
-          logger.info('Output is URL, downloading...', { url: imageUrl.substring(0, 50) });
-          imageBuffer = await this.downloadImage(imageUrl);
-        } else {
-          throw new Error(`Unexpected output array element type: ${typeof output[0]}`);
+      let providerUrl = null;
+
+      const convertOutputToBuffer = async (raw) => {
+        if (!raw) return null;
+
+        if (Buffer.isBuffer(raw)) {
+          return raw.length ? raw : null;
         }
-      } else if (output instanceof Uint8Array) {
-        // Single Uint8Array
-        imageBuffer = Buffer.from(output);
-        logger.info('Single Uint8Array converted to buffer', { 
-          sizeKB: (imageBuffer.length / 1024).toFixed(2) 
-        });
-      } else if (typeof output === 'string') {
-        // URL string
-        logger.info('Output is URL string, downloading...');
-        imageBuffer = await this.downloadImage(output);
-      } else {
-        throw new Error(`Unexpected output type from Replicate: ${typeof output}`);
-      }
+
+        if (raw instanceof Uint8Array) {
+          return raw.length ? Buffer.from(raw) : null;
+        }
+
+        if (typeof raw === 'string') {
+          if (!raw.trim()) return null;
+          if (raw.startsWith('data:image')) {
+            const base64Data = raw.split(',')[1];
+            return base64Data ? Buffer.from(base64Data, 'base64') : null;
+          }
+          if (!providerUrl) {
+            providerUrl = raw;
+          }
+          return this.downloadImage(raw);
+        }
+
+        if (Array.isArray(raw)) {
+          for (const item of raw) {
+            const buffer = await convertOutputToBuffer(item);
+            if (buffer && buffer.length) {
+              return buffer;
+            }
+          }
+          return null;
+        }
+
+        if (typeof raw === 'object') {
+          // Some Replicate outputs wrap the data in { buffer } or { data }
+          if (raw.buffer) {
+            return convertOutputToBuffer(raw.buffer);
+          }
+
+          if (Array.isArray(raw.data) && raw.data.every((value) => typeof value === 'number')) {
+            return Buffer.from(raw.data);
+          }
+
+          if (typeof raw.base64 === 'string') {
+            return Buffer.from(raw.base64, 'base64');
+          }
+
+          if (typeof raw.b64_json === 'string') {
+            return Buffer.from(raw.b64_json, 'base64');
+          }
+
+          if (raw.Body && Array.isArray(raw.Body.data)) {
+            return Buffer.from(raw.Body.data);
+          }
+
+          let candidateUrl =
+            raw.url ||
+            raw.href ||
+            raw.uri ||
+            raw.path ||
+            raw.file ||
+            raw.filepath ||
+            raw.file_path ||
+            raw.download_url ||
+            raw.cdn_url ||
+            raw.signed_url ||
+            null;
+
+          if (!candidateUrl && typeof raw.toString === 'function') {
+            const potentialUrl = raw.toString();
+            if (typeof potentialUrl === 'string' && potentialUrl.startsWith('http')) {
+              candidateUrl = potentialUrl;
+            }
+          }
+
+          if (!candidateUrl && typeof raw.getUrl === 'function') {
+            try {
+              const resolvedUrl = await raw.getUrl();
+              if (resolvedUrl) {
+                candidateUrl = resolvedUrl;
+              }
+            } catch (getUrlError) {
+              logger.warn('Replicate output getUrl() failed', {
+                error: getUrlError.message
+              });
+            }
+          }
+
+          if (!candidateUrl && typeof raw.getDownloadUrl === 'function') {
+            try {
+              const resolvedUrl = await raw.getDownloadUrl();
+              if (resolvedUrl) {
+                candidateUrl = resolvedUrl;
+              }
+            } catch (getUrlError) {
+              logger.warn('Replicate output getDownloadUrl() failed', {
+                error: getUrlError.message
+              });
+            }
+          }
+
+          if (candidateUrl) {
+            if (!providerUrl) {
+              providerUrl = candidateUrl;
+            }
+            return this.downloadImage(candidateUrl);
+          }
+        }
+
+        return null;
+      };
+
+      const imageBuffer = await convertOutputToBuffer(output);
 
       if (!imageBuffer || imageBuffer.length === 0) {
+        const outputPreview = Array.isArray(output) && output.length > 0
+          ? typeof output[0]
+          : typeof output;
+
+        logger.error('Unsupported Replicate output format', {
+          outputPreview,
+          isArray: Array.isArray(output)
+        });
         throw new Error('Failed to create image buffer from Replicate output');
       }
 
@@ -264,7 +448,8 @@ class ImageGenerationAgent {
         buffer: imageBuffer,
         seed: String(seed),
         costCents,
-        params
+        params,
+        url: providerUrl
       };
 
     } catch (error) {
@@ -272,10 +457,11 @@ class ImageGenerationAgent {
         error: error.message,
         stack: error.stack
       });
-      
-      // Fallback to mock for development
+
       if (process.env.NODE_ENV === 'development') {
-        logger.warn('Using mock image for development');
+        logger.warn('Using mock image for development', {
+          reason: error.message
+        });
         return {
           url: 'https://via.placeholder.com/1024x1024.png?text=Imagen+4+Ultra+Mock',
           seed: String(seed),
@@ -474,6 +660,7 @@ class ImageGenerationAgent {
         // Add variation to ensure different prompts
         const variedOptions = {
           ...generationOptions,
+          generationMethod: generationOptions.generationMethod || 'batch_generation',
           variationSeed: i, // Add seed for variation
           mode:
             generationOptions.mode ||
@@ -511,7 +698,7 @@ class ImageGenerationAgent {
           normalizePromptMetadata(promptMetadataRaw);
 
         // Generate image
-        const generation = await this.generateImage(userId, promptId, generationOptions);
+        const generation = await this.generateImage(userId, promptId, variedOptions);
 
         const existingTags = Array.isArray(generation.tags)
           ? generation.tags.filter((value) => typeof value === 'string' && value.trim())
@@ -525,6 +712,9 @@ class ImageGenerationAgent {
           ...(generation.metadata || {}),
           ...normalizedPromptMetadata,
         };
+        if (!generation.metadata.generationMethod) {
+          generation.metadata.generationMethod = 'batch_generation';
+        }
         if (!generation.metadata.spec) {
           generation.metadata.spec = promptMetadataRaw;
         }

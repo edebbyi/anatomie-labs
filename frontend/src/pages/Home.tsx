@@ -1,25 +1,30 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner@2.0.3';
 import CommandBar from '../components/CommandBar';
-import { HomeGallery } from '../components/HomeGallery';
+import { HomeGallery, type HomeCollection } from '../components/HomeGallery';
 import { useGalleryData } from '../hooks/useGalleryData';
 import { API_URL } from '../config/env';
 import authAPI from '../services/authAPI';
+import type { GalleryImage } from '../types/images';
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const Home: React.FC = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const {
     images,
     loading,
     submitFeedback,
     updateImages,
-    appendGeneratedImages,
-    recordInteraction,
-  } = useGalleryData();
+      appendGeneratedImages,
+      recordInteraction,
+    } = useGalleryData();
 
   const [highlightSuggestions, setHighlightSuggestions] = useState(true);
+  const [initialCollection, setInitialCollection] = useState<HomeCollection>('All');
 
   useEffect(() => {
     if (location.pathname === '/home') {
@@ -40,6 +45,29 @@ const Home: React.FC = () => {
       }
     };
   }, [location.pathname]);
+
+  useEffect(() => {
+    const stateData = location.state as
+      | { focusCollection?: HomeCollection; highlightPrompt?: string }
+      | null
+      | undefined;
+
+    if (!stateData) {
+      return;
+    }
+
+    if (stateData.focusCollection) {
+      setInitialCollection(stateData.focusCollection);
+    }
+
+    if (stateData.highlightPrompt) {
+      toast('Opened latest batch', {
+        description: stateData.highlightPrompt,
+      });
+    }
+
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, navigate]);
 
   const handleLike = async (imageId: string) => {
     recordInteraction(imageId);
@@ -66,23 +94,99 @@ const Home: React.FC = () => {
   const handleDiscard = async (imageId: string) => {
     recordInteraction(imageId);
     await submitFeedback(imageId, false);
+
+    let previousImage: GalleryImage | undefined;
+    const archivedAt = new Date();
+
     updateImages((previous) =>
-      previous.map((img) =>
-        img.id === imageId
-          ? { ...img, archived: true, archivedAt: new Date() }
-          : img
-      )
+      previous.map((img) => {
+        if (img.id === imageId) {
+          previousImage = img;
+          return { ...img, archived: true, archivedAt };
+        }
+        return img;
+      })
     );
-    toast('Design moved to archive', {
-      description: 'You can restore it from the Archive tab anytime.',
-    });
+
+    const token = authAPI.getToken();
+    const shouldPersist = Boolean(token) && UUID_PATTERN.test(imageId);
+
+    if (!shouldPersist) {
+      toast('Design moved to archive', {
+        description: 'You can restore it from the Archive tab anytime.',
+      });
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/podna/archive/${imageId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        const message =
+          (data && (data.message || data.error)) || 'Failed to archive design';
+        throw new Error(message);
+      }
+
+      const serverArchivedAt = data?.data?.archivedAt;
+      if (serverArchivedAt) {
+        const serverDate = new Date(serverArchivedAt);
+        if (!Number.isNaN(serverDate.getTime())) {
+          updateImages((previous) =>
+            previous.map((img) =>
+              img.id === imageId ? { ...img, archivedAt: serverDate } : img
+            )
+          );
+        }
+      }
+
+      toast('Design moved to archive', {
+        description: 'You can restore it from the Archive tab anytime.',
+      });
+    } catch (error) {
+      if (previousImage) {
+        const snapshot = { ...previousImage };
+        updateImages((previous) =>
+          previous.map((img) =>
+            img.id === imageId ? { ...snapshot } : img
+          )
+        );
+      }
+      const message =
+        error instanceof Error ? error.message : 'Failed to archive design';
+      toast.error(message);
+    }
   };
 
   const handleUnarchive = async (imageId: string) => {
     const token = authAPI.getToken();
-    
-    if (!token) {
+    const isPersistableId = UUID_PATTERN.test(imageId);
+
+    if (isPersistableId && !token) {
       toast.error('You need to be signed in');
+      return;
+    }
+
+    let previousImage: GalleryImage | undefined;
+
+    updateImages((previous) =>
+      previous.map((img) => {
+        if (img.id === imageId) {
+          previousImage = img;
+          return { ...img, archived: false, archivedAt: undefined };
+        }
+        return img;
+      })
+    );
+
+    if (!isPersistableId || !token) {
+      toast.success('Design restored from archive');
       return;
     }
 
@@ -94,21 +198,24 @@ const Home: React.FC = () => {
           Authorization: `Bearer ${token}`,
         },
       });
+      const data = await response.json().catch(() => null);
 
       if (!response.ok) {
-        throw new Error('Failed to restore design');
+        const message =
+          (data && (data.message || data.error)) || 'Failed to restore design';
+        throw new Error(message);
       }
-
-      updateImages((previous) =>
-        previous.map((img) =>
-          img.id === imageId
-            ? { ...img, archived: false, archivedAt: undefined }
-            : img
-        )
-      );
 
       toast.success('Design restored from archive');
     } catch (error) {
+      if (previousImage) {
+        const snapshot = { ...previousImage };
+        updateImages((previous) =>
+          previous.map((img) =>
+            img.id === imageId ? { ...snapshot } : img
+          )
+        );
+      }
       const message = error instanceof Error ? error.message : 'Failed to restore design';
       toast.error(message);
     }
@@ -255,6 +362,7 @@ const Home: React.FC = () => {
           onDiscard={handleDiscard}
           onUnarchive={handleUnarchive}
           onImageView={recordInteraction}
+          initialCollection={initialCollection}
         />
       </div>
 

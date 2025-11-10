@@ -6,6 +6,7 @@ export interface User {
   email: string;
   name: string;
   role: string;
+  onboardingComplete?: boolean;
   preferences?: {
     style?: string | null;
     favoriteColors?: string[];
@@ -44,6 +45,33 @@ class AuthAPI {
   }
 
   /**
+   * Persist session data in localStorage for routing logic
+   */
+  private persistSession(user: User, token: string) {
+    this.token = token;
+    localStorage.setItem('authToken', token);
+    localStorage.setItem('currentUser', JSON.stringify(user));
+    this.saveUserProfile(user);
+  }
+
+  /**
+   * Keep a lightweight copy of onboarding status to drive redirects
+   */
+  private saveUserProfile(user: User) {
+    if (!user) return;
+
+    const profilePayload = {
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      onboardingComplete: Boolean(user.onboardingComplete),
+      timestamp: new Date().toISOString()
+    };
+
+    localStorage.setItem('userProfile', JSON.stringify(profilePayload));
+  }
+
+  /**
    * Register a new user
    */
   async register(data: RegisterData): Promise<AuthResponse> {
@@ -71,10 +99,8 @@ class AuthAPI {
       });
 
       if (response.data.success && response.data.data.token) {
-        this.token = response.data.data.token;
-        localStorage.setItem('authToken', this.token);
-        localStorage.setItem('currentUser', JSON.stringify(response.data.data.user));
-        console.log('💾 AuthAPI: Token and user data saved to localStorage');
+        this.persistSession(response.data.data.user, response.data.data.token);
+        console.log('💾 AuthAPI: Token, user data, and profile saved to localStorage');
       }
 
       return response.data;
@@ -120,9 +146,7 @@ class AuthAPI {
       );
 
       if (response.data.success && response.data.data.token) {
-        this.token = response.data.data.token;
-        localStorage.setItem('authToken', this.token);
-        localStorage.setItem('currentUser', JSON.stringify(response.data.data.user));
+        this.persistSession(response.data.data.user, response.data.data.token);
       }
 
       return response.data;

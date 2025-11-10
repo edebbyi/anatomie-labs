@@ -32,7 +32,8 @@ const CommandBar: React.FC<CommandBarProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!command.trim()) return;
-    onCommandExecute(command.trim(), { source: 'text' });
+    // Use 'voice' source to trigger prompt enhancement pipeline
+    onCommandExecute(command.trim(), { source: 'voice' });
     setCommand('');
     setIsActive(false);
   };
@@ -55,7 +56,8 @@ const CommandBar: React.FC<CommandBarProps> = ({
   };
 
   const handleSuggestion = (value: string) => {
-    onCommandExecute(value, { source: 'text' });
+    // Use 'voice' source to trigger prompt enhancement pipeline
+    onCommandExecute(value, { source: 'voice' });
     setCommand('');
     setIsActive(false);
   };

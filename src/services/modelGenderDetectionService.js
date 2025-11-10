@@ -1,11 +1,95 @@
 const db = require('./database');
 const logger = require('../utils/logger');
 
+const DEFAULT_MODEL_GENDER_PREFERENCE = Object.freeze({
+  setting: 'auto',
+  detected_gender: null,
+  confidence: 0,
+  manual_override: false,
+  last_updated: null,
+  alternation_counter: 0,
+  model_count: Object.freeze({
+    female: 0,
+    male: 0,
+    neutral: 0
+  })
+});
+
+const DEFAULT_MODEL_GENDER_PREFERENCE_JSON = JSON.stringify(
+  DEFAULT_MODEL_GENDER_PREFERENCE
+);
+
+const createDefaultModelGenderPreference = () => ({
+  ...DEFAULT_MODEL_GENDER_PREFERENCE,
+  model_count: { ...DEFAULT_MODEL_GENDER_PREFERENCE.model_count }
+});
+
 /**
  * Model Gender Detection Service
  * Manages model gender preferences for generation and detection of gender distribution in portfolios
  */
 class ModelGenderDetectionService {
+  constructor() {
+    this.schemaReady = false;
+    this.schemaPromise = null;
+  }
+
+  async ensureModelGenderPreferenceSupport() {
+    if (this.schemaReady) {
+      return;
+    }
+
+    if (!this.schemaPromise) {
+      this.schemaPromise = (async () => {
+        const columnCheck = await db.query(
+          `SELECT column_name
+             FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = 'user_style_profiles'
+               AND column_name = 'model_gender_preference'
+             LIMIT 1`
+        );
+
+        if (columnCheck.rowCount === 0) {
+          logger.warn(
+            'model_gender_preference column missing on user_style_profiles. Creating it automatically.'
+          );
+
+          await db.query(
+            `ALTER TABLE user_style_profiles
+               ADD COLUMN IF NOT EXISTS model_gender_preference JSONB`
+          );
+
+          await db.query(
+            `CREATE INDEX IF NOT EXISTS idx_user_style_profiles_model_gender
+               ON user_style_profiles USING GIN (model_gender_preference)`
+          );
+        }
+
+        await db.query(
+          `UPDATE user_style_profiles
+             SET model_gender_preference = COALESCE(model_gender_preference, $1::jsonb)
+             WHERE model_gender_preference IS NULL`,
+          [DEFAULT_MODEL_GENDER_PREFERENCE_JSON]
+        );
+
+        this.schemaReady = true;
+      })();
+    }
+
+    try {
+      await this.schemaPromise;
+    } catch (error) {
+      logger.error('Failed to ensure model gender preference schema', {
+        error: error.message
+      });
+      this.schemaPromise = null;
+      throw error;
+    }
+
+    this.schemaPromise = null;
+  }
+
   /**
    * Get user's current model gender preference
    * @param {string} userId - User ID
@@ -13,6 +97,8 @@ class ModelGenderDetectionService {
    */
   async getUserModelGenderPreference(userId) {
     try {
+      await this.ensureModelGenderPreferenceSupport();
+
       const result = await db.query(
         `SELECT model_gender_preference 
          FROM user_style_profiles 
@@ -22,21 +108,9 @@ class ModelGenderDetectionService {
 
       if (result.rows.length === 0) {
         // Create default preference if user style profile doesn't exist
-        const defaultPreference = {
-          setting: 'auto',
-          detected_gender: null,
-          confidence: 0,
-          manual_override: false,
-          last_updated: null,
-          alternation_counter: 0,
-          model_count: {
-            female: 0,
-            male: 0,
-            neutral: 0
-          }
-        };
+        const defaultPreference = createDefaultModelGenderPreference();
 
-      // Try to create or update style profile
+        // Try to create or update style profile
         await db.query(
           `INSERT INTO user_style_profiles (user_id, profile_data, model_gender_preference)
            VALUES ($1, $2, $3)
@@ -48,18 +122,16 @@ class ModelGenderDetectionService {
         return defaultPreference;
       }
 
-      return result.rows[0].model_gender_preference || {
-        setting: 'auto',
-        detected_gender: null,
-        confidence: 0,
-        manual_override: false,
-        last_updated: null,
-        alternation_counter: 0,
-        model_count: {
-          female: 0,
-          male: 0,
-          neutral: 0
-        }
+      const preference =
+        result.rows[0].model_gender_preference || createDefaultModelGenderPreference();
+
+      const normalizedSetting = this.normalizeGenderValue(preference.setting) || 'auto';
+      const normalizedDetected = this.normalizeGenderValue(preference.detected_gender) || preference.detected_gender;
+
+      return {
+        ...preference,
+        setting: normalizedSetting,
+        detected_gender: normalizedDetected
       };
     } catch (error) {
       logger.error('Failed to get user model gender preference', {
@@ -88,16 +160,19 @@ class ModelGenderDetectionService {
       // Get current preference (this will create profile if it doesn't exist)
       let currentPreference = await this.getUserModelGenderPreference(userId);
 
+      const normalizedSetting = this.normalizeGenderValue(setting) || 'auto';
+      const normalizedDetected = this.normalizeGenderValue(detected_gender) || currentPreference.detected_gender;
+
       // Update preference
       const updatedPreference = {
         ...currentPreference,
-        setting,
+        setting: normalizedSetting,
         manual_override,
-        detected_gender: detected_gender || currentPreference.detected_gender,
+        detected_gender: normalizedDetected || currentPreference.detected_gender,
         confidence: confidence || currentPreference.confidence,
         last_updated: new Date().toISOString(),
         // Reset alternation counter when setting changes
-        alternation_counter: setting === 'both' ? currentPreference.alternation_counter : 0
+        alternation_counter: normalizedSetting === 'both' ? currentPreference.alternation_counter : 0
       };
 
       // Update database (use UPSERT to ensure profile exists)
@@ -307,16 +382,18 @@ class ModelGenderDetectionService {
   async getModelGenderPromptElement(userId, generationIndex = 0, trackAlternation = true) {
     try {
       const preference = await this.getUserModelGenderPreference(userId);
-      const { setting, detected_gender, manual_override } = preference;
+      const { manual_override } = preference;
+      const normalizedSetting = this.normalizeGenderValue(preference.setting) || 'auto';
+      const normalizedDetected = this.normalizeGenderValue(preference.detected_gender);
 
       let promptElement = '';
       let gender = 'both';
-      let effectiveSetting = setting;
+      let effectiveSetting = normalizedSetting;
 
-      if (setting === 'auto') {
+      if (normalizedSetting === 'auto') {
         // Auto mode: use detected gender if available, otherwise both
-        gender = detected_gender || 'both';
-      } else if (setting === 'both') {
+        gender = normalizedDetected || 'both';
+      } else if (normalizedSetting === 'both') {
         // Alternation mode - toggle between male and female for variety
         if (trackAlternation) {
           // Alternate between male and female
@@ -337,9 +414,11 @@ class ModelGenderDetectionService {
         } else {
           gender = 'both';
         }
+      } else if (normalizedSetting === 'neutral') {
+        gender = 'neutral';
       } else {
         // Explicit setting: female or male
-        gender = setting;
+        gender = normalizedSetting;
       }
 
       // Generate prompt element based on gender
@@ -348,13 +427,13 @@ class ModelGenderDetectionService {
       // Track generation if requested
       if (trackAlternation) {
         const generationId = `gen_${userId}_${Date.now()}`;
-        await this.trackGeneration(userId, generationId, setting, gender);
+        await this.trackGeneration(userId, generationId, effectiveSetting, gender);
       }
 
       logger.debug('Model gender prompt element generated', {
         userId,
         setting: effectiveSetting,
-        detectedGender: detected_gender,
+        detectedGender: normalizedDetected,
         usedGender: gender,
         manual_override,
         promptElement
@@ -364,7 +443,7 @@ class ModelGenderDetectionService {
         promptElement,
         gender,
         setting: effectiveSetting,
-        detectedGender: detected_gender,
+        detectedGender: normalizedDetected,
         manualOverride: manual_override
       };
     } catch (error) {
@@ -382,18 +461,20 @@ class ModelGenderDetectionService {
    * @returns {string} - Prompt element (unweighted - weight is applied by IntelligentPromptBuilder)
    */
   generateModelGenderPromptElement(gender) {
+    const normalized = this.normalizeGenderValue(gender) || 'both';
+
     // These are used with formatToken() in IntelligentPromptBuilder which adds weights
     const promptElements = {
-      female: 'stunning female model',
-      male: 'stunning male model',
-      both: 'stunning model',
+      female: 'beautiful female model facing camera',
+      male: 'handsome male model facing camera',
+      both: 'beautiful model facing camera',
       auto: '', // Will be determined by user portfolio analysis
-      neutral: '',
-      multiple: 'stunning model',
-      unclear: 'beautiful model'
+      neutral: 'androgynous model facing camera',
+      multiple: 'beautiful models facing camera',
+      unclear: 'beautiful model facing camera'
     };
 
-    return promptElements[gender] || '';
+    return promptElements[normalized] || promptElements.both;
   }
 
   /**
@@ -422,6 +503,47 @@ class ModelGenderDetectionService {
       });
       // Don't throw - tracking failure shouldn't block generation
     }
+  }
+
+  /**
+   * Normalize gender preference values to canonical tokens.
+   * Handles variations like "female only", "female-only", "feminine", etc.
+   * @param {string|null|undefined} value
+   * @returns {string|null}
+   */
+  normalizeGenderValue(value) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    const stringValue = String(value).trim().toLowerCase();
+    if (!stringValue) {
+      return null;
+    }
+
+    const collapsed = stringValue.replace(/[\s_\-]+/g, '');
+
+    if (['female', 'femaleonly', 'feminine', 'woman', 'women', 'womens'].includes(collapsed)) {
+      return 'female';
+    }
+
+    if (['male', 'maleonly', 'masculine', 'man', 'men', 'mens'].includes(collapsed)) {
+      return 'male';
+    }
+
+    if (['both', 'any', 'either', 'mixed', 'allgenders', 'coed'].includes(collapsed)) {
+      return 'both';
+    }
+
+    if (['neutral', 'androgynous', 'nonbinary', 'genderneutral', 'unisex'].includes(collapsed)) {
+      return 'neutral';
+    }
+
+    if (['auto', 'automatic', 'autodetect', 'detected'].includes(collapsed)) {
+      return 'auto';
+    }
+
+    return collapsed;
   }
 
   /**

@@ -30,9 +30,21 @@ const Login: React.FC = () => {
       
       // Check if user has completed onboarding
       const userProfile = localStorage.getItem('userProfile');
-      const profileData = userProfile ? JSON.parse(userProfile) : null;
+      let profileData: { onboardingComplete?: boolean } | null = null;
+      if (userProfile) {
+        try {
+          profileData = JSON.parse(userProfile);
+        } catch {
+          profileData = null;
+        }
+      }
+
+      const currentUser = authAPI.getCurrentUser();
+      const hasCompleted = Boolean(
+        profileData?.onboardingComplete ?? currentUser?.onboardingComplete
+      );
       
-      if (profileData && profileData.onboardingComplete) {
+      if (hasCompleted) {
         navigate('/home');
       } else {
         navigate('/onboarding');

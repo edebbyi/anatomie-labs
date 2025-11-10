@@ -65,6 +65,7 @@ router.post('/register', [
         email: user.email,
         name: user.name,
         role: user.role,
+        onboardingComplete: false,
         preferences: {
           style: null,
           favoriteColors: [],
@@ -146,7 +147,8 @@ router.post('/login', [
         name: userWithProfile.name,
         role: userWithProfile.role,
         preferences: userWithProfile.preferences,
-        lastLogin: userWithProfile.lastLogin
+        lastLogin: userWithProfile.lastLogin,
+        onboardingComplete: userWithProfile.onboardingComplete
       },
       token
     }
@@ -175,6 +177,7 @@ router.get('/profile', authMiddleware, asyncHandler(async (req, res) => {
         email: user.email,
         name: user.name,
         role: user.role,
+        onboardingComplete: user.onboardingComplete,
         preferences: user.preferences,
         createdAt: user.createdAt,
         lastLogin: user.lastLogin

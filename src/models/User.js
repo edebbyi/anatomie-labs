@@ -127,6 +127,7 @@ class User {
     if (!result.rows[0]) return null;
     
     const user = result.rows[0];
+    const onboardingComplete = await this.hasCompletedOnboarding(userId);
     return {
       id: user.id,
       email: user.email,
@@ -135,6 +136,7 @@ class User {
       createdAt: user.created_at,
       updatedAt: user.updated_at,
       lastLogin: user.last_login,
+      onboardingComplete,
       preferences: {
         style: user.style_preference,
         favoriteColors: user.favorite_colors || [],
@@ -281,6 +283,39 @@ class User {
     const query = 'SELECT COUNT(*) as count FROM users WHERE is_active = true';
     const result = await db.query(query);
     return parseInt(result.rows[0].count);
+  }
+
+  /**
+   * Determine if a user has completed onboarding
+   * We treat onboarding as complete if the user has any of:
+   * - A style profile generated
+   * - An uploaded portfolio
+   * - Generated images in the system
+   * @param {string} userId
+   * @returns {Promise<boolean>}
+   */
+  static async hasCompletedOnboarding(userId) {
+    const result = await db.query(
+      `
+        SELECT
+          EXISTS (SELECT 1 FROM style_profiles WHERE user_id = $1) AS has_style_profile,
+          EXISTS (SELECT 1 FROM portfolios WHERE user_id = $1) AS has_portfolio,
+          EXISTS (SELECT 1 FROM images WHERE user_id = $1) AS has_images
+      `,
+      [userId]
+    );
+    
+    if (!result.rows[0]) {
+      return false;
+    }
+    
+    const {
+      has_style_profile: hasStyleProfile,
+      has_portfolio: hasPortfolio,
+      has_images: hasImages
+    } = result.rows[0];
+    
+    return Boolean(hasStyleProfile || hasPortfolio || hasImages);
   }
 }
 

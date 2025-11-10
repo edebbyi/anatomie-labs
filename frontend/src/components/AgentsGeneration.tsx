@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Sparkles, 
   Loader, 
@@ -12,13 +12,17 @@ import {
 } from 'lucide-react';
 import { generationAPI, portfolioAPI, workflowAPI, systemAPI, StyleProfile } from '../services/agentsAPI';
 import authAPI from '../services/authAPI';
+import { normalizeGalleryImage, serializeGalleryImage } from '../utils/gallery';
+import type { GalleryImage } from '../types/images';
 
 interface GeneratedImage {
   id: string;
   url: string;
   prompt: string;
-  cost: number;
+  cost?: number;
   personalized: boolean;
+  createdAt?: string;
+  metadata?: Record<string, unknown>;
 }
 
 const AgentsGeneration: React.FC = () => {
@@ -38,9 +42,126 @@ const AgentsGeneration: React.FC = () => {
   const [generationMode, setGenerationMode] = useState<'specific' | 'batch'>('specific');
   const [quantity, setQuantity] = useState(1);
   const [usePersonalization, setUsePersonalization] = useState(true);
-  
+
+  useEffect(() => {
+    if (generationMode === 'batch' && quantity < 5) {
+      setQuantity(5);
+    } else if (generationMode === 'specific' && quantity > 10) {
+      setQuantity(10);
+    }
+  }, [generationMode, quantity]);
+
   // Agents system status
   const [agentsAvailable, setAgentsAvailable] = useState(false);
+
+  const persistAgentImages = useCallback((
+    rawImages: any[],
+    context: { mode: 'specific' | 'batch'; prompt: string; personalized: boolean }
+  ) => {
+    if (!Array.isArray(rawImages) || rawImages.length === 0) {
+      return;
+    }
+
+    const currentUser = authAPI.getCurrentUser();
+    const storageKey = currentUser?.id ? `generatedImages_${currentUser.id}` : 'generatedImages';
+
+    let existing: GalleryImage[] = [];
+    try {
+      const existingRaw = localStorage.getItem(storageKey);
+      if (existingRaw) {
+        const parsed = JSON.parse(existingRaw);
+        if (Array.isArray(parsed)) {
+          existing = parsed
+            .map((item: any) => normalizeGalleryImage(item))
+            .filter((img): img is GalleryImage => Boolean(img));
+        }
+      }
+    } catch (storageError) {
+      console.warn('Failed to read stored gallery images for AI agents', storageError);
+    }
+
+    const existingIds = new Set(existing.map((image) => image.id));
+    const normalized = rawImages
+      .map((raw: any, index: number) => {
+        const url = raw?.url || raw?.image_url;
+        if (typeof url !== 'string' || url.trim().length === 0) {
+          return null;
+        }
+
+        const metadataSource =
+          (raw && typeof raw.metadata === 'object' && raw.metadata !== null
+            ? (raw.metadata as Record<string, unknown>)
+            : {}) as Record<string, unknown>;
+
+        const metadata: Record<string, unknown> = {
+          ...metadataSource,
+          agentSource: 'ai_agents',
+          personalized: context.personalized,
+        };
+
+        if (!metadata.generationMethod) {
+          metadata.generationMethod = context.mode === 'batch' ? 'batch_generation' : 'generate_endpoint';
+        }
+
+        if (raw.generation_cost !== undefined) {
+          metadata.agentGenerationCost = raw.generation_cost;
+        }
+        if (raw.processing_cost !== undefined) {
+          metadata.agentProcessingCost = raw.processing_cost;
+        }
+
+        const promptText =
+          (typeof raw.prompt === 'string' && raw.prompt.trim()) ||
+          (typeof metadataSource['original_prompt'] === 'string' &&
+            (metadataSource['original_prompt'] as string).trim()) ||
+          context.prompt;
+
+        const generatedAt =
+          raw.created_at ||
+          (typeof metadataSource['generated_at'] === 'string'
+            ? (metadataSource['generated_at'] as string)
+            : undefined);
+
+        const normalizedImage = normalizeGalleryImage({
+          id: raw.image_id || raw.id || raw.prompt_id || `agents-${Date.now()}-${index}`,
+          url,
+          prompt: promptText,
+          timestamp: generatedAt ? new Date(generatedAt) : new Date(),
+          metadata,
+          tags: [
+            context.mode === 'batch' ? 'batch generation' : 'specific generation',
+            context.personalized ? 'personalized' : 'standard',
+            'ai agents',
+          ],
+          origin: 'user',
+          lastInteractedAt: new Date(),
+        });
+
+        if (!normalizedImage || existingIds.has(normalizedImage.id)) {
+          return null;
+        }
+
+        return normalizedImage;
+      })
+      .filter((img): img is GalleryImage => Boolean(img));
+
+    if (normalized.length === 0) {
+      return;
+    }
+
+    const merged = [...normalized, ...existing];
+
+    const serialized = JSON.stringify(merged.map((image) => serializeGalleryImage(image)));
+
+    try {
+      localStorage.setItem(storageKey, serialized);
+      if (storageKey !== 'generatedImages') {
+        localStorage.setItem('generatedImages', serialized);
+      }
+    } catch (storageError) {
+      console.warn('Failed to persist AI agent images to gallery storage', storageError);
+    }
+  }, []);
 
   useEffect(() => {
     const currentUser = authAPI.getCurrentUser();
@@ -91,38 +212,80 @@ const AgentsGeneration: React.FC = () => {
     setSuccess(null);
 
     try {
-      let result;
-      
-      if (usePersonalization && hasProfile) {
-        // Use AI agents for personalized generation
-        result = await generationAPI.smartGenerate(userId, prompt, {
-          mode: generationMode,
-          quantity
-        });
-        
-        if (result.success) {
-          if (generationMode === 'specific' && result.results) {
-            const images = result.results.results.map(img => ({
-              id: img.prompt_id,
-              url: img.image_url,
-              prompt: img.metadata.original_prompt,
-              cost: img.generation_cost + img.processing_cost,
-              personalized: true
-            }));
-            
-            setGeneratedImages(prev => [...images, ...prev]);
-            setSuccess(`Generated ${result.results.successful} personalized images for $${result.results.total_cost.toFixed(3)}`);
-          } else if (generationMode === 'batch') {
-            setSuccess(`Batch generation started! Batch ID: ${result.batch_id}`);
-          }
-        } else {
-          throw new Error(result.message);
-        }
-      } else {
-        // Fallback to basic generation (your existing API)
+      if (!(usePersonalization && hasProfile)) {
         throw new Error('Basic generation not implemented in this demo');
       }
-      
+
+      const result = await generationAPI.smartGenerate(userId, prompt, {
+        mode: generationMode,
+        quantity
+      });
+
+      if (!result?.success) {
+        throw new Error(result?.message || 'Generation failed');
+      }
+
+      const imagesPayload = Array.isArray(result?.data?.images)
+        ? result.data.images
+        : Array.isArray(result?.results?.results)
+          ? result.results.results
+          : [];
+
+      const personalized = Boolean(usePersonalization && hasProfile);
+
+      if (imagesPayload.length > 0) {
+        const mappedImages: GeneratedImage[] = imagesPayload
+          .map((img: any, index: number) => {
+            const url = img?.url || img?.image_url;
+            if (typeof url !== 'string' || url.trim().length === 0) {
+              return null;
+            }
+
+            const cost =
+              typeof img?.generation_cost === 'number'
+                ? img.generation_cost + (typeof img?.processing_cost === 'number' ? img.processing_cost : 0)
+                : typeof img?.cost === 'number'
+                  ? img.cost
+                  : undefined;
+
+            const promptText =
+              (typeof img?.prompt === 'string' && img.prompt.trim()) ||
+              (typeof img?.metadata?.original_prompt === 'string' &&
+                img.metadata.original_prompt.trim()) ||
+              prompt;
+
+            return {
+              id: img?.id || img?.image_id || img?.prompt_id || `agents-${Date.now()}-${index}`,
+              url,
+              prompt: promptText,
+              cost,
+              personalized,
+              createdAt: img?.created_at || img?.metadata?.generated_at,
+              metadata:
+                img?.metadata && typeof img.metadata === 'object' ? img.metadata : undefined,
+            };
+          })
+          .filter((img): img is GeneratedImage => Boolean(img));
+
+        if (mappedImages.length > 0) {
+          setGeneratedImages((prev) => [...mappedImages, ...prev]);
+          persistAgentImages(imagesPayload, {
+            mode: generationMode,
+            prompt,
+            personalized,
+          });
+          const quantityLabel = mappedImages.length === 1 ? 'image' : 'images';
+          setSuccess(
+            `Generated ${mappedImages.length} ${generationMode === 'batch' ? 'batch ' : ''}${quantityLabel} with AI agents.`
+          );
+        } else {
+          setSuccess(result.message || 'Generation complete, but no images were returned.');
+        }
+      } else if (generationMode === 'batch' && result?.data?.status) {
+        setSuccess(result.message || 'Batch generation started. Images will appear shortly.');
+      } else {
+        setSuccess(result.message || 'Generation complete, but no images were returned.');
+      }
     } catch (error: any) {
       setError(error.message);
     } finally {
@@ -286,7 +449,7 @@ const AgentsGeneration: React.FC = () => {
               className="w-full p-2 border rounded-lg"
             >
               <option value="specific">Specific (1-10 images)</option>
-              <option value="batch">Batch (10-100 images)</option>
+              <option value="batch">Batch (5-100 images)</option>
             </select>
           </div>
           
@@ -294,7 +457,7 @@ const AgentsGeneration: React.FC = () => {
             <label className="block font-medium mb-2">Quantity</label>
             <input
               type="number"
-              min={generationMode === 'specific' ? 1 : 10}
+              min={generationMode === 'specific' ? 1 : 5}
               max={generationMode === 'specific' ? 10 : 100}
               value={quantity}
               onChange={(e) => setQuantity(parseInt(e.target.value))}
@@ -386,7 +549,11 @@ const AgentsGeneration: React.FC = () => {
                 <div className="p-4">
                   <p className="text-sm text-gray-600 mb-2">{image.prompt}</p>
                   <div className="flex items-center justify-between text-xs text-gray-500">
-                    <span>${image.cost.toFixed(3)}</span>
+                    <span>
+                      {typeof image.cost === 'number'
+                        ? `$${image.cost.toFixed(3)}`
+                        : 'AI Agents'}
+                    </span>
                     {image.personalized && (
                       <span className="bg-purple-100 text-purple-600 px-2 py-1 rounded-full">
                         Personalized

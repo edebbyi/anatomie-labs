@@ -452,7 +452,7 @@ const Lightbox: React.FC<LightboxProps> = ({
             >
               <img
                 src={currentImage.url}
-                alt="Design"
+                alt=""
                 style={{
                   width: '100%',
                   height: '100%',
@@ -460,6 +460,16 @@ const Lightbox: React.FC<LightboxProps> = ({
                   display: 'block',
                 }}
                 draggable={false}
+                onError={(e) => {
+                  const el = e.currentTarget as HTMLImageElement & { dataset?: Record<string, string> };
+                  if (el.dataset && el.dataset.fallbackApplied === 'true') return;
+                  if (el.dataset) el.dataset.fallbackApplied = 'true';
+                  el.src =
+                    'data:image/svg+xml;utf8,' +
+                    encodeURIComponent(
+                      `<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1000"><rect width="100%" height="100%" fill="#111827"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#6b7280" font-family="system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial" font-size="24">Image unavailable</text></svg>`
+                    );
+                }}
               />
               <div
                 style={{

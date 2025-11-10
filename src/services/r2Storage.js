@@ -108,6 +108,34 @@ class R2StorageService {
   }
 
   /**
+   * Upload an image from a remote URL directly to R2
+   * @param {string} imageUrl - Remote image URL
+   * @param {Object} options - Upload options
+   * @returns {Promise<string>} CDN URL of the uploaded image
+   */
+  async uploadFromUrl(imageUrl, options = {}) {
+    try {
+      if (!imageUrl || typeof imageUrl !== 'string') {
+        throw new Error('Invalid image URL');
+      }
+
+      // Best-effort download of the remote image
+      const res = await fetch(imageUrl);
+      if (!res.ok) {
+        throw new Error(`Failed to download image (${res.status})`);
+      }
+      const arrayBuf = await res.arrayBuffer();
+      const buffer = Buffer.from(arrayBuf);
+
+      const upload = await this.uploadImage(buffer, options);
+      return upload.cdnUrl;
+    } catch (error) {
+      logger.error('R2 uploadFromUrl failed', { error: error.message, imageUrl });
+      throw error;
+    }
+  }
+
+  /**
    * Upload multiple images in batch
    * @param {Array} images - Array of {buffer, metadata}
    * @returns {Promise<Array>} Upload results

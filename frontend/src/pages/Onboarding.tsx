@@ -269,6 +269,10 @@ const Onboarding: React.FC = () => {
       }
     }
 
+    if (!metadata.generationMethod) {
+      metadata.generationMethod = 'batch_generation';
+    }
+
     return metadata;
   };
 
@@ -565,9 +569,12 @@ const Onboarding: React.FC = () => {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          count: 5,  // Generate 5 initial images (reduced from 8 for faster onboarding)
-          mode: 'exploratory',  // Use exploratory mode
-          provider: 'imagen-4-ultra'  // Use Imagen-4 Ultra via Replicate
+          count: 12,                 // Target 12 images total (3 prompts × 4 images)
+          prompts: 3,                // Number of unique prompts to generate
+          imagesPerPrompt: 4,        // Number of images per prompt
+          linkPrompts: true,         // Group images by their originating prompt
+          mode: 'exploratory',       // Use exploratory mode
+          provider: 'imagen-4-ultra' // Use Imagen-4 Ultra via Replicate
         })
       });
       
@@ -584,6 +591,41 @@ const Onboarding: React.FC = () => {
 
       // Extract generated images from Podna response
       const generations = generateResult.data?.generations || [];
+      const groups = Array.isArray(generateResult.data?.groups)
+        ? generateResult.data.groups
+        : [];
+      console.log('🧩 Prompt groups returned:', groups.length);
+
+      const groupMap = new Map<string, {
+        groupId: string;
+        index: number;
+        count: number;
+        promptText?: string | null;
+        tags?: string[];
+      }>();
+
+      groups.forEach((group: any) => {
+        const groupId = group?.id || group?.groupId;
+        const imageIds: string[] = Array.isArray(group?.imageIds)
+          ? group.imageIds
+          : Array.isArray(group?.images)
+            ? group.images
+            : [];
+
+        imageIds.forEach((imageId, index) => {
+          if (typeof imageId === 'string' && imageId.trim()) {
+            groupMap.set(imageId, {
+              groupId,
+              index,
+              count: imageIds.length,
+              promptText: group?.promptText || null,
+              tags: Array.isArray(group?.tags)
+                ? group.tags.filter((tag: any) => typeof tag === 'string' && tag.trim())
+                : undefined
+            });
+          }
+        });
+      });
       
       if (generations.length > 0) {
         console.log('🎨 Processing generated images:', generations.length);
@@ -594,8 +636,23 @@ const Onboarding: React.FC = () => {
           const prompt = resolvePromptText(gen);
           const metadata = normalizeGenerationMetadata(gen);
           const tags = deriveTagsFromMetadata(metadata, gen.tags, prompt);
+          const groupInfo = groupMap.get(gen.id);
 
-          const storedTags = tags.length ? tags : undefined;
+          if (groupInfo) {
+            metadata.promptGroup = {
+              id: groupInfo.groupId,
+              index: groupInfo.index,
+              count: groupInfo.count,
+              prompt: groupInfo.promptText || prompt || undefined
+            };
+          }
+
+          const tagSet = new Set(tags);
+          if (groupInfo?.tags) {
+            groupInfo.tags.forEach((tag) => tagSet.add(tag));
+          }
+
+          const storedTags = tagSet.size ? Array.from(tagSet) : undefined;
 
           return {
             id: gen.id || `onboard-${Date.now()}-${idx}`,
@@ -604,7 +661,10 @@ const Onboarding: React.FC = () => {
             tags: storedTags,
             origin: 'user',
             timestamp: gen.createdAt ? new Date(gen.createdAt) : new Date(),
-            metadata
+            metadata,
+            groupId: groupInfo?.groupId || gen.promptGroupId || gen.prompt_group_id || null,
+            groupIndex: groupInfo?.index ?? gen.promptGroupIndex ?? gen.prompt_group_index ?? null,
+            groupSize: groupInfo?.count ?? gen.promptGroupCount ?? gen.prompt_group_count ?? null
           };
         });
         console.log('💾 Saving images to localStorage:', newImages.length);

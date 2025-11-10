@@ -8,6 +8,7 @@ const r2Storage = require('../../services/r2Storage');
 const Image = require('../../models/Image');
 const Pod = require('../../models/Pod');
 const { extractMetadataFromPromptSpec } = require('../../utils/promptMetadata');
+const { deriveConsistentTags } = require('../../services/taggingAgent');
 
 // Configure multer for memory storage
 const upload = multer({
@@ -131,15 +132,34 @@ router.get('/gallery', asyncHandler(async (req, res) => {
       }
     }
 
+    const taggingResult = deriveConsistentTags({
+      metadata: vltData,
+      rawTags: vltData.tags,
+      prompt: vltData.promptText || vltData.mainPrompt || vltData.prompt || image.prompt_text,
+    });
+
+    const consistentTags = taggingResult.tags.length > 0
+      ? taggingResult.tags
+      : [
+          vltData.style?.aesthetic || vltData.aesthetic,
+          vltData.garmentType,
+          (Array.isArray(vltData.colors)
+            ? vltData.colors[0]
+            : vltData.colors && typeof vltData.colors === 'object'
+              ? Object.values(vltData.colors).find(Boolean)
+              : undefined)
+        ].filter(Boolean);
+
+    if (consistentTags.length > 0) {
+      vltData.tags = consistentTags;
+    }
+
     return {
       id: image.id,
       url: image.cdn_url,
       prompt: vltData.promptText || vltData.mainPrompt || vltData.prompt_text || 'Generated image',
       promptId: vltData.promptId || `prompt-${image.id}`, // Group by prompt ID
-      tags: vltData.tags || [
-        vltData.garmentType || 'fashion',
-        vltData.aesthetic || vltData.style?.aesthetic || 'contemporary'
-      ].filter(Boolean),
+      tags: consistentTags,
       metadata: {
         garmentType: vltData.garmentType,
         silhouette: vltData.silhouette,
@@ -150,7 +170,10 @@ router.get('/gallery', asyncHandler(async (req, res) => {
         model: vltData.model || 'imagen',
         confidence: vltData.confidence,
         aesthetic: vltData.style?.aesthetic || vltData.aesthetic,
-        formality: vltData.style?.formality || vltData.formality
+        formality: vltData.style?.formality || vltData.formality,
+        styleTag: taggingResult.style,
+        garmentTag: taggingResult.garment,
+        colorTag: taggingResult.color
       }
     };
   });

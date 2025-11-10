@@ -649,10 +649,10 @@ router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
     });
   }
 
-  if (mode === 'batch' && (!quantity || quantity < 10 || quantity > 100)) {
+  if (mode === 'batch' && (!quantity || quantity < 5 || quantity > 100)) {
     return res.status(400).json({
       success: false,
-      message: 'Batch mode requires quantity between 10 and 100'
+      message: 'Batch mode requires quantity between 5 and 100'
     });
   }
 

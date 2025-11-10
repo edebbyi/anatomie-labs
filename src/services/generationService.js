@@ -14,6 +14,7 @@ const stableDiffusionAdapter = require('../adapters/stableDiffusionAdapter');
 const dalleAdapter = require('../adapters/dalleAdapter');
 const db = require('./database');
 const logger = require('../utils/logger');
+const { deriveConsistentTags } = require('./taggingAgent');
 
 /**
  * Generation Orchestrator Service
@@ -240,7 +241,8 @@ class GenerationService {
         promptId: settings.promptId || generationId, // Use promptId from settings or fallback to generationId
         mainPrompt: settings.mainPrompt || finalPrompt, // Pass the actual prompt text used
         negativePrompt: settings.negativePrompt || negativePrompt, // Pass negative prompt
-        promptMetadata: settings.promptMetadata || {} // Pass prompt metadata
+        promptMetadata: settings.promptMetadata || {}, // Pass prompt metadata
+        generationMethod: 'generate_endpoint'
       });
 
       // Stage 8: Validate and filter to return best N images
@@ -716,7 +718,8 @@ class GenerationService {
           source: 'agent_generated',
           originalQuery: query,
           usedStyleProfile: !!styleProfile
-        }
+        },
+        generationMethod: 'generate_endpoint'
       });
 
       // Complete
@@ -763,16 +766,35 @@ class GenerationService {
     const {
       userId,
       prompt,
+      prompts, // ADDED: Support for array of prompts
       negativePrompt,
-      settings = {}
+      settings = {},
+      batchMode = false,
+      individualPrompts = false
     } = params;
 
     const generationId = this.generateId();
 
+    // ADDED: Handle batch mode with multiple prompts
+    if (batchMode && individualPrompts && prompts && Array.isArray(prompts)) {
+      logger.info('Starting batch generation with individual prompts', {
+        generationId,
+        userId,
+        promptCount: prompts.length
+      });
+
+      return await this.generateBatchWithIndividualPrompts({
+        userId,
+        prompts,
+        generationId,
+        settings
+      });
+    }
+
     logger.info('Starting prompt-based generation', {
       generationId,
       userId,
-      promptLength: prompt.length,
+      promptLength: prompt?.length,
       hasCreativity: !!settings.creativity,
       respectUserIntent: !!settings.respectUserIntent
     });
@@ -971,7 +993,8 @@ class GenerationService {
         routing,
         mainPrompt: finalMainPrompt,
         negativePrompt: finalNegativePrompt,
-        promptMetadata: promptMetadata
+        promptMetadata: promptMetadata,
+        generationMethod: 'generate_endpoint'
       });
 
       // Complete
@@ -1200,26 +1223,63 @@ class GenerationService {
    */
   async uploadAndStoreAssets(params) {
     const { generationId, userId, images, provider } = params;
+    const generationMethod = params.generationMethod || 'generate_endpoint';
     const uploadedAssets = [];
 
     for (let i = 0; i < images.length; i++) {
       const image = images[i];
       
       try {
-        // Download image from provider URL
-        const response = await fetch(image.url);
-        const buffer = Buffer.from(await response.arrayBuffer());
+        let buffer = null;
+        let fileSize = null;
+        let cdnUrl = image.cdn_url || image.cdnUrl || image.url || null;
+        let r2Key = null;
 
-        // Upload to R2
-        const key = `generations/${userId}/${generationId}/${i}.png`;
-        const uploadResult = await r2Service.uploadImage(buffer, key, {
-          contentType: 'image/png',
-          metadata: {
-            generationId,
-            provider: provider.id,
-            index: i
+        if (r2Service.isConfigured()) {
+          try {
+            const response = await fetch(image.url);
+            buffer = Buffer.from(await response.arrayBuffer());
+            fileSize = buffer.length;
+
+            const uploadResult = await r2Service.uploadImage(buffer, {
+              userId,
+              imageType: 'generated',
+              format: 'png',
+              originalFilename: `${generationId}-${i}.png`,
+            });
+
+            cdnUrl = uploadResult.cdnUrl;
+            r2Key = uploadResult.key;
+          } catch (uploadError) {
+            logger.warn('uploadAndStoreAssets: R2 upload failed, falling back to provider URL', {
+              generationId,
+              index: i,
+              error: uploadError.message
+            });
           }
-        });
+        } else {
+          logger.warn('uploadAndStoreAssets: R2 not configured, using provider URL', {
+            generationId,
+            index: i
+          });
+        }
+
+        if (!cdnUrl) {
+          logger.warn('uploadAndStoreAssets: Missing CDN URL, skipping image', {
+            generationId,
+            index: i
+          });
+          continue;
+        }
+
+        // If we never downloaded the buffer (no R2), try to estimate file size from provider later
+        if (!buffer && image.buffer instanceof Buffer) {
+          buffer = image.buffer;
+          fileSize = buffer.length;
+        }
+        if (fileSize === null && buffer) {
+          fileSize = buffer.length;
+        }
 
         // Store in database - both generation_assets AND images tables
         const client = await db.getClient();
@@ -1233,30 +1293,56 @@ class GenerationService {
             RETURNING *
           `, [
             generationId,
-            uploadResult.key,
-            uploadResult.cdnUrl,
+            r2Key,
+            cdnUrl,
             'image',
-            buffer.length,
+            fileSize ?? 0,
             provider.id,
             JSON.stringify({ revisedPrompt: image.revisedPrompt })
           ]);
           
           // ALSO insert into images table for gallery display
           // Include promptId and prompt text in vlt_analysis for pairing and display
-          const vltAnalysis = {
+          const promptText = params.mainPrompt || image.revisedPrompt || 'Generated image';
+          const baseMetadata = {
             ...(params.vltSpec || {}),
+            promptMetadata: params.promptMetadata || {},
+          };
+
+          if (!baseMetadata.generationMethod) {
+            baseMetadata.generationMethod = generationMethod;
+          }
+
+          const taggingResult = deriveConsistentTags({
+            metadata: baseMetadata,
+            rawTags: params.vltSpec?.tags,
+            prompt: promptText,
+          });
+
+          const consistentTags = taggingResult.tags.length > 0
+            ? taggingResult.tags
+            : [
+                params.vltSpec?.style?.aesthetic || params.vltSpec?.aesthetic || 'contemporary',
+                params.vltSpec?.garment_type || params.vltSpec?.garmentType || 'fashion',
+                Array.isArray(params.vltSpec?.colors) ? params.vltSpec.colors[0] : undefined
+              ].filter(Boolean);
+
+          const vltAnalysis = {
+            ...baseMetadata,
             promptId: params.promptId || null, // Store prompt ID for pairing
-            promptText: params.mainPrompt || image.revisedPrompt || 'Generated image', // Store actual prompt text (now passed directly)
+            promptText,
             mainPrompt: params.mainPrompt || image.revisedPrompt, // Store main prompt
             negativePrompt: params.negativePrompt || '', // Store negative prompt if available
-            promptMetadata: params.promptMetadata || {}, // Store prompt metadata
             generationIndex: i,
             generatedAt: new Date().toISOString(),
             model: provider.id,
-            tags: [
-              params.vltSpec?.garment_type || 'fashion',
-              params.vltSpec?.style?.aesthetic || params.vltSpec?.aesthetic || 'contemporary'
-            ].filter(Boolean)
+            tags: consistentTags,
+            normalizedTags: {
+              style: taggingResult.style,
+              garment: taggingResult.garment,
+              color: taggingResult.color,
+            },
+            generationMethod,
           };
           
           await client.query(`
@@ -1266,10 +1352,10 @@ class GenerationService {
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           `, [
             userId,
-            uploadResult.key,
+            r2Key,
             process.env.R2_BUCKET_NAME || 'anatomie-lab',
-            uploadResult.cdnUrl,
-            buffer.length,
+            cdnUrl,
+            fileSize ?? 0,
             'png',
             JSON.stringify(vltAnalysis),
             0.030 // Imagen 4 Ultra cost per image
@@ -1289,6 +1375,103 @@ class GenerationService {
     }
 
     return uploadedAssets;
+  }
+
+  /**
+   * Helper: Save a generated image record to DB and return a lightweight object
+   * Used by batch/voice pathways that already have a CDN URL
+   */
+  async saveGeneratedImage({ generationId, userId, imageUrl, prompt, negativePrompt, metadata = {}, provider = 'google-imagen' }) {
+    const client = await db.getClient();
+    try {
+      // Persist minimal asset record in generation_assets for consistency
+      const assetResult = await client.query(
+        `INSERT INTO generation_assets (
+           generation_id, r2_key, cdn_url, asset_type, file_size, provider_id, metadata
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [
+          generationId,
+          null,                    // r2_key unknown (uploaded via helper returns only URL)
+          imageUrl,
+          'image',
+          null,                    // file_size unknown
+          provider,
+          JSON.stringify({ prompt, negativePrompt, ...metadata })
+        ]
+      );
+
+      // Also persist into images table for gallery queries
+      const vltAnalysis = {
+        promptText: prompt,
+        mainPrompt: prompt,
+        negativePrompt: negativePrompt || '',
+        generatedAt: new Date().toISOString(),
+        model: provider,
+        ...(typeof metadata === 'object' ? metadata : {}),
+      };
+
+      await client.query(
+        `INSERT INTO images (
+           user_id, r2_key, r2_bucket, cdn_url,
+           original_size, format, vlt_analysis, generation_cost
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          userId,
+          null,
+          process.env.R2_BUCKET_NAME || 'anatomie-lab',
+          imageUrl,
+          null,
+          'jpg',
+          JSON.stringify(vltAnalysis),
+          null,
+        ]
+      );
+
+      const asset = assetResult.rows[0];
+      return {
+        id: asset.id,
+        imageUrl: imageUrl,
+        url: imageUrl,
+        prompt,
+        metadata,
+        provider,
+        createdAt: new Date().toISOString(),
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Helper: Update generation record fields safely
+   */
+  async updateGenerationRecord(generationId, fields = {}) {
+    const client = await db.getClient();
+    try {
+      const updates = [];
+      const params = [generationId];
+
+      if (fields.status) {
+        params.push(fields.status);
+        updates.push(`status = $${params.length}`);
+      }
+
+      // Store non-schema extras into pipeline_data for debugging/telemetry
+      const extras = { ...fields };
+      delete extras.status;
+      if (Object.keys(extras).length > 0) {
+        params.push(JSON.stringify(extras));
+        updates.push(`pipeline_data = COALESCE(pipeline_data, '{}'::jsonb) || $${params.length}::jsonb`);
+      }
+
+      if (updates.length === 0) return;
+
+      const sql = `UPDATE generations SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $1`;
+      await client.query(sql, params);
+    } finally {
+      client.release();
+    }
   }
 
   /**
@@ -1677,6 +1860,338 @@ class GenerationService {
       });
       // Non-critical error, don't throw
     }
+  }
+
+  /**
+   * ADDED: Generate batch of images with individual unique prompts
+   * Used for voice commands like "make 5 jackets"
+   */
+  async generateBatchWithIndividualPrompts(params) {
+    const { userId, prompts, generationId, settings = {} } = params;
+    const generationMethod = settings.generationMethod || 'batch_generation';
+    const providerKey = this.resolveProviderKey(settings.provider);
+    const provider = this.adapters[providerKey] || this.adapters[this.defaultProvider];
+    const providerId = provider?.providerId || providerKey || this.defaultProvider;
+    const r2Configured = r2Service.isConfigured();
+    const isDevEnv = this.isDevelopmentEnvironment();
+
+    if (!Array.isArray(prompts) || prompts.length === 0) {
+      throw new Error('Prompts must be a non-empty array');
+    }
+
+    if (!provider || typeof provider.generate !== 'function') {
+      throw new Error(`No image adapter available for provider "${providerKey}"`);
+    }
+
+    logger.info('Generating batch with individual prompts', {
+      generationId,
+      userId,
+      count: prompts.length,
+      provider: providerId,
+      r2Configured
+    });
+
+    try {
+      await this.createGenerationRecord({
+        generationId,
+        userId,
+        status: 'processing',
+        settings: { ...settings, batchCount: prompts.length, provider: providerId },
+        skipVlt: true
+      });
+
+      if (!r2Configured) {
+        logger.warn('R2 not configured; using provider URLs for batch images', {
+          generationId
+        });
+      }
+
+      const images = [];
+      let fallbackCount = 0;
+      let failureCount = 0;
+
+      for (let i = 0; i < prompts.length; i++) {
+        const promptData = prompts[i] || {};
+        const positivePrompt = typeof promptData.positive === 'string'
+          ? promptData.positive
+          : String(promptData.positive || '').trim();
+        const negativePrompt = typeof promptData.negative === 'string'
+          ? promptData.negative
+          : String(promptData.negative || '').trim() || undefined;
+
+        logger.info(`Generating image ${i + 1}/${prompts.length}`, {
+          generationId,
+          provider: providerId,
+          promptPreview: positivePrompt.substring(0, 100)
+        });
+
+        try {
+          const imageResult = await provider.generate({
+            prompt: positivePrompt,
+            negativePrompt,
+            ...settings
+          });
+
+          if (!imageResult || imageResult.success === false) {
+            throw new Error(imageResult?.error || 'Image adapter returned an error');
+          }
+
+          const primaryImageEntry = Array.isArray(imageResult.images) ? imageResult.images[0] : null;
+          const imageUrl = this.extractImageUrl(primaryImageEntry);
+
+          if (!imageUrl) {
+            throw new Error('Image adapter returned no usable image URL');
+          }
+
+          let cdnUrl = imageUrl;
+          if (r2Configured) {
+            try {
+              cdnUrl = await r2Service.uploadFromUrl(imageUrl, {
+                userId,
+                generationId,
+                metadata: {
+                  prompt: positivePrompt,
+                  index: i,
+                  ...(promptData.metadata || {})
+                }
+              });
+            } catch (uploadError) {
+              logger.warn('R2 upload failed; using provider URL', {
+                generationId,
+                imageIndex: i,
+                error: uploadError.message
+              });
+              cdnUrl = imageUrl;
+            }
+          }
+
+          const metadata = {
+            ...(promptData.metadata || {}),
+            generationMethod,
+            provider: providerId,
+            ...(imageResult.metadata ? { providerMetadata: imageResult.metadata } : {}),
+            ...(cdnUrl !== imageUrl ? { sourceUrl: imageUrl } : {})
+          };
+
+          const savedImage = await this.saveGeneratedImage({
+            generationId,
+            userId,
+            imageUrl: cdnUrl,
+            prompt: positivePrompt,
+            negativePrompt,
+            metadata,
+            provider: providerId
+          });
+
+          images.push(savedImage);
+
+          logger.info(`Image ${i + 1}/${prompts.length} generated successfully`, {
+            generationId,
+            imageId: savedImage.id
+          });
+        } catch (imageError) {
+          failureCount += 1;
+          logger.error(`Failed to generate image ${i + 1}/${prompts.length}`, {
+            generationId,
+            error: imageError.message
+          });
+
+          if (isDevEnv) {
+            try {
+              const placeholderUrl = this.getDevelopmentPlaceholderUrl(i);
+              const fallbackMetadata = {
+                ...(promptData.metadata || {}),
+                generationMethod,
+                provider: 'development-placeholder',
+                fallback: true,
+                fallbackReason: imageError.message
+              };
+
+              const placeholderImage = await this.saveGeneratedImage({
+                generationId,
+                userId,
+                imageUrl: placeholderUrl,
+                prompt: positivePrompt || 'Development placeholder prompt',
+                negativePrompt,
+                metadata: fallbackMetadata,
+                provider: 'development-placeholder'
+              });
+
+              images.push(placeholderImage);
+              fallbackCount += 1;
+
+              logger.warn('Used development placeholder for failed generation', {
+                generationId,
+                index: i,
+                placeholderUrl
+              });
+            } catch (fallbackError) {
+              logger.error('Failed to persist development placeholder image', {
+                generationId,
+                index: i,
+                error: fallbackError.message
+              });
+            }
+          }
+        }
+      }
+
+      if (images.length === 0) {
+        const noImagesError = new Error('No images were generated in the batch');
+        logger.error('Batch generation produced zero images', {
+          generationId,
+          requestedCount: prompts.length
+        });
+        await this.failGeneration(generationId, noImagesError);
+        throw noImagesError;
+      }
+
+      await this.updateGenerationRecord(generationId, {
+        status: 'completed',
+        imageCount: images.length,
+        fallbackCount,
+        failureCount
+      });
+
+      logger.info('Batch generation completed', {
+        generationId,
+        successCount: images.length,
+        requestedCount: prompts.length,
+        fallbackCount,
+        failureCount
+      });
+
+      return {
+        success: true,
+        generationId,
+        images,
+        metadata: {
+          totalRequested: prompts.length,
+          totalGenerated: images.length,
+          fallbackCount,
+          failureCount
+        }
+      };
+
+    } catch (error) {
+      logger.error('Batch generation failed', {
+        generationId,
+        error: error.message
+      });
+
+      await this.failGeneration(generationId, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Normalize provider identifiers to known adapter keys
+   * @param {string} requestedProvider
+   * @returns {string} Adapter key
+   */
+  resolveProviderKey(requestedProvider) {
+    const fallback = this.defaultProvider;
+
+    if (!requestedProvider) {
+      return fallback;
+    }
+
+    const normalized = String(requestedProvider).trim().toLowerCase();
+    if (!normalized) {
+      return fallback;
+    }
+
+    const alias = normalized.replace(/[\s_]+/g, '-');
+
+    const aliasMap = {
+      'imagen': 'google-imagen',
+      'imagen-4': 'google-imagen',
+      'imagen4': 'google-imagen',
+      'imagen-4-ultra': 'google-imagen',
+      'imagen4-ultra': 'google-imagen',
+      'google-imagen': 'google-imagen',
+      'google-imagen-4': 'google-imagen',
+      'google-imagen-4-ultra': 'google-imagen',
+      'replicate-imagen-4-ultra': 'google-imagen',
+      'google-gemini': 'google-gemini',
+      'gemini': 'google-gemini',
+      'gemini-pro': 'google-gemini',
+      'gemini-1-5': 'google-gemini',
+      'stable-diffusion': 'stable-diffusion-xl',
+      'stable-diffusion-xl': 'stable-diffusion-xl',
+      'sdxl': 'stable-diffusion-xl',
+      'openai-dalle3': 'openai-dalle3',
+      'dalle-3': 'openai-dalle3',
+      'dall-e-3': 'openai-dalle3'
+    };
+
+    const mappedKey = aliasMap[alias] || alias;
+    if (this.adapters[mappedKey]) {
+      return mappedKey;
+    }
+
+    logger.warn('Unknown provider alias, falling back to default adapter', {
+      requestedProvider,
+      alias: mappedKey,
+      fallback
+    });
+
+    return fallback;
+  }
+
+  /**
+   * Determine if we should allow development fallbacks (placeholders, etc.)
+   * @returns {boolean}
+   */
+  isDevelopmentEnvironment() {
+    const env = (process.env.NODE_ENV || '').toLowerCase();
+    return !env || env === 'development' || env === 'test';
+  }
+
+  /**
+   * Provide a lightweight placeholder image URL for development environments
+   * @param {number} index
+   * @returns {string}
+   */
+  getDevelopmentPlaceholderUrl(index = 0) {
+    const variants = [
+      'https://via.placeholder.com/1024x1024.png?text=Fashion+Concept+Preview',
+      'https://via.placeholder.com/1024x1024.png?text=Design+In+Progress',
+      'https://via.placeholder.com/1024x1024.png?text=Style+Prototype'
+    ];
+    return variants[index % variants.length];
+  }
+
+  /**
+   * Safely extract a usable image URL from provider responses
+   * @param {any} imageEntry
+   * @returns {string|null}
+   */
+  extractImageUrl(imageEntry) {
+    if (!imageEntry) {
+      return null;
+    }
+
+    if (typeof imageEntry === 'string') {
+      return imageEntry.trim() || null;
+    }
+
+    if (typeof imageEntry === 'object') {
+      if (typeof imageEntry.url === 'string' && imageEntry.url.trim()) {
+        return imageEntry.url.trim();
+      }
+      if (typeof imageEntry.cdnUrl === 'string' && imageEntry.cdnUrl.trim()) {
+        return imageEntry.cdnUrl.trim();
+      }
+      if (typeof imageEntry.imageUrl === 'string' && imageEntry.imageUrl.trim()) {
+        return imageEntry.imageUrl.trim();
+      }
+      if (typeof imageEntry.base64 === 'string' && imageEntry.base64.trim()) {
+        return `data:image/png;base64,${imageEntry.base64.trim()}`;
+      }
+    }
+
+    return null;
   }
 
   /**

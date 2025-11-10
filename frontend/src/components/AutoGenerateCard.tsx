@@ -134,11 +134,11 @@ export function AutoGenerateCard({
                           startAutoCollapse();
                         }}
                       >
-hen                        <SelectTrigger id="batch-size" className="bg-white/20 border-white/30 text-white h-9 focus:ring-0 focus:outline-none">
+                        <SelectTrigger id="batch-size" className="bg-white/20 border-white/30 text-white h-9 focus:ring-0 focus:outline-none">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-[#6f6ef6]/95 text-white border-white/20 backdrop-blur-md shadow-xl">
-                          <SelectItem className="focus:bg-white/20 focus:text-white" value="10">10 images</SelectItem>
+                          <SelectItem className="focus:bg-white/20 focus:text-white" value="5">5 images</SelectItem>
                           <SelectItem className="focus:bg-white/20 focus:text-white" value="25">25 images</SelectItem>
                           <SelectItem className="focus:bg-white/20 focus:text-white" value="50">50 images</SelectItem>
                           <SelectItem className="focus:bg-white/20 focus:text-white" value="100">100 images</SelectItem>

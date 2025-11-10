@@ -126,13 +126,14 @@ class Pod {
 
       const ownedImages = await client.query(
         `
-          SELECT g.id
+          SELECT DISTINCT g.id
           FROM generations g
-          JOIN feedback f ON f.generation_id = g.id
-          WHERE g.user_id = $1
+          LEFT JOIN feedback f
+            ON f.generation_id = g.id
             AND f.user_id = $1
             AND f.type = ANY($2)
-            AND g.id = ANY($3::uuid[])
+          WHERE g.id = ANY($3::uuid[])
+            AND (g.user_id = $1 OR f.id IS NOT NULL)
         `,
         [userId, POSITIVE_FEEDBACK_TYPES, validImageIds]
       );
@@ -234,11 +235,12 @@ class Pod {
         `
           SELECT g.id
           FROM generations g
-          JOIN feedback f ON f.generation_id = g.id
-          WHERE g.id = $1
-            AND g.user_id = $2
+          LEFT JOIN feedback f
+            ON f.generation_id = g.id
             AND f.user_id = $2
             AND f.type = ANY($3)
+          WHERE g.id = $1
+            AND (g.user_id = $2 OR f.id IS NOT NULL)
         `,
         [imageId, userId, POSITIVE_FEEDBACK_TYPES]
       );

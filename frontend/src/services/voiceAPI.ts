@@ -42,8 +42,18 @@ voiceHTTP.interceptors.response.use(
 export interface VoiceCommandResponse {
   success: boolean;
   data: {
+    // What the user said (human-readable)
+    displayQuery: string;
     originalCommand: string;
+
+    // Enhanced prompt sent to API
+    enhancedPrompt: string;
+    negativePrompt: string;
+
+    // Parsed command details
     parsedCommand: any;
+
+    // Generation results
     generation: any;
     timestamp: string;
   };

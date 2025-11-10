@@ -13,7 +13,7 @@ type GalleryHookResult = {
   refresh: () => Promise<void>;
   updateImages: (updater: UpdateFn) => void;
   submitFeedback: (imageId: string, liked: boolean) => Promise<void>;
-  appendGeneratedImages: (rawAssets: any[], prompt: string, generationMethod?: 'generate_endpoint' | 'voice_command') => void;
+  appendGeneratedImages: (rawAssets: any[], prompt: string, generationMethod?: 'generate_endpoint' | 'voice_command' | 'batch_generation') => void;
   recordInteraction: (imageId: string) => void;
 };
 
@@ -225,31 +225,54 @@ export const useGalleryData = (): GalleryHookResult => {
 
       if (!token || !currentUser) return;
 
-      try {
-        await fetch(`${API_URL}/agents/feedback`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
+      const headers = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      } as const;
+
+      const safePost = async (url: string, body: unknown) => {
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => '');
+            throw new Error(
+              errorText || `Request to ${url} failed with ${response.status}`
+            );
+          }
+        } catch (error) {
+          console.warn('Feedback request failed', { url, error });
+        }
+      };
+
+      await Promise.all([
+        safePost(`${API_URL}/podna/feedback`, {
+          generationId: imageId,
+          type: liked ? 'like' : 'dislike',
+        }),
+        safePost(`${API_URL}/agents/feedback`, [
+          {
+            image_id: imageId,
+            designer_id: currentUser.id,
+            selected: liked,
+            rejected: !liked,
           },
-          body: JSON.stringify([
-            {
-              image_id: imageId,
-              designer_id: currentUser.id,
-              selected: liked,
-              rejected: !liked,
-            },
-          ]),
-        });
-      } catch (error) {
-        console.error('Failed to send feedback', error);
-      }
+        ]),
+      ]);
     },
     [updateImages]
   );
 
   const appendGeneratedImages = useCallback(
-    (assets: any[], prompt: string, generationMethod: 'generate_endpoint' | 'voice_command' = 'generate_endpoint') => {
+    (
+      assets: any[],
+      prompt: string,
+      generationMethod: 'generate_endpoint' | 'voice_command' | 'batch_generation' = 'generate_endpoint'
+    ) => {
       const normalized = assets
         .map((asset: any, index) => {
           const promptText =
@@ -258,28 +281,67 @@ export const useGalleryData = (): GalleryHookResult => {
             asset.promptText ||
             prompt;
 
-          const metadata =
+          const baseMetadata =
             (asset && typeof asset.metadata === 'object' && asset.metadata) ||
-            asset.promptMetadata ||
-            asset.prompt_metadata ||
-            asset.promptSpec ||
+            (asset && typeof asset.promptMetadata === 'object' && asset.promptMetadata) ||
+            (asset && typeof asset.prompt_metadata === 'object' && asset.prompt_metadata) ||
+            (asset && typeof asset.promptSpec === 'object' && asset.promptSpec) ||
             {};
 
-          const normalized = normalizeGalleryImage({
+          const metadata: any = { ...baseMetadata };
+
+          if (!metadata.generationMethod) {
+            metadata.generationMethod = generationMethod;
+          }
+
+          const promptGroupSource =
+            metadata.promptGroup ||
+            (typeof metadata.prompt_group === 'object' && metadata.prompt_group) ||
+            asset.promptGroup ||
+            asset.prompt_group ||
+            asset.group ||
+            asset.promptGroupInfo;
+
+          if (promptGroupSource) {
+            metadata.promptGroup =
+              typeof promptGroupSource === 'object'
+                ? { ...promptGroupSource }
+                : { prompt: String(promptGroupSource) };
+          }
+
+          const normalizedImage = normalizeGalleryImage({
             id: asset.id?.toString() || `gen-${Date.now()}-${index}`,
-            url: asset.url || asset.cdnUrl || asset.cdn_url,
+            url: asset.url || asset.cdnUrl || asset.cdn_url || asset.imageUrl || asset.image_url,
             prompt: promptText,
             timestamp: asset.createdAt ? new Date(asset.createdAt) : new Date(),
-            metadata: {
-              ...metadata,
-              generationMethod,
-            },
+            metadata,
             tags: Array.isArray(asset.tags) ? asset.tags : undefined,
             origin: asset.origin || 'user',
             lastInteractedAt: new Date(),
+            groupId:
+              asset.groupId ??
+              asset.promptGroupId ??
+              asset.prompt_group_id ??
+              metadata.promptGroup?.id ??
+              metadata.promptGroup?.groupId ??
+              metadata.promptGroup?.group_id,
+            groupIndex:
+              asset.groupIndex ??
+              asset.promptGroupIndex ??
+              asset.prompt_group_index ??
+              metadata.promptGroup?.index ??
+              metadata.promptGroup?.groupIndex ??
+              metadata.promptGroup?.position,
+            groupSize:
+              asset.groupSize ??
+              asset.promptGroupCount ??
+              asset.prompt_group_count ??
+              metadata.promptGroup?.count ??
+              metadata.promptGroup?.size ??
+              metadata.promptGroup?.total,
           });
 
-          return normalized;
+          return normalizedImage;
         })
         .filter((img): img is GalleryImage => Boolean(img));
 

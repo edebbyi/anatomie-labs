@@ -79,6 +79,71 @@ class ImprovedTrendAnalysisAgent {
   }
 
   /**
+   * Normalize style tags for TEXT[] storage (dedupe, trim, limit size)
+   */
+  sanitizeStyleTags(styleTags) {
+    if (!styleTags) {
+      return [];
+    }
+
+    let tags = styleTags;
+
+    if (typeof tags === 'string') {
+      try {
+        const parsed = JSON.parse(tags);
+        if (Array.isArray(parsed)) {
+          tags = parsed;
+        } else if (typeof parsed === 'string') {
+          tags = [parsed];
+        } else {
+          tags = [tags];
+        }
+      } catch (_error) {
+        tags = tags
+          .split(/[,;/]/)
+          .map(tag => tag.trim())
+          .filter(Boolean);
+      }
+    }
+
+    if (!Array.isArray(tags)) {
+      return [];
+    }
+
+    const seen = new Set();
+    const cleaned = [];
+
+    tags.forEach(tag => {
+      let value = null;
+
+      if (typeof tag === 'string') {
+        value = tag;
+      } else if (tag && typeof tag.name === 'string') {
+        value = tag.name;
+      }
+
+      if (!value) {
+        return;
+      }
+
+      const normalized = value.trim().replace(/\s+/g, ' ');
+      if (!normalized) {
+        return;
+      }
+
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) {
+        return;
+      }
+
+      seen.add(key);
+      cleaned.push(normalized.slice(0, 120));
+    });
+
+    return cleaned;
+  }
+
+  /**
    * Extract aesthetic themes (sporty-chic, equestrian, minimalist, etc.)
    */
   extractAestheticThemes(descriptors) {
@@ -544,6 +609,9 @@ class ImprovedTrendAnalysisAgent {
       avg_confidence: validatedAvgConfidence,
       avg_completeness: validatedAvgCompleteness
     };
+
+    const styleTagsArray = this.sanitizeStyleTags(data.style_tags);
+    validatedData.style_tags = styleTagsArray;
     
     const query = `
       INSERT INTO style_profiles (
@@ -610,9 +678,9 @@ class ImprovedTrendAnalysisAgent {
         JSON.stringify(data.signature_pieces),
         data.rich_summary,
         data.total_images,
-        data.avg_confidence,
-        data.avg_completeness,
-        JSON.stringify(data.style_tags || [])
+        validatedData.avg_confidence,
+        validatedData.avg_completeness,
+        styleTagsArray
       ]);
     } catch (e) {
       // Defensive retry: if any numeric overflow slips through, set fields to NULL
@@ -657,7 +725,7 @@ class ImprovedTrendAnalysisAgent {
         JSON.stringify(data.signature_pieces),
         data.rich_summary,
         data.total_images,
-        JSON.stringify(data.style_tags || [])
+        styleTagsArray
       ]);
     }
 

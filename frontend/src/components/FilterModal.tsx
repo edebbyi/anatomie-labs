@@ -10,19 +10,10 @@ import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 
-type FilterGroups = {
-  style: string[]; // Only style descriptors like "sporty chic", "minimalist", etc.
-  garment: string[]; // Garment types only
-  silhouette?: string[]; // Silhouette/modifier tags
-  color: string[]; // Color tags only
-  fabric?: string[]; // Fabrics/materials
-  lighting?: string[]; // Lighting/specs
-};
-
 interface FilterModalProps {
   open: boolean;
   onClose: () => void;
-  filters: FilterGroups;
+  availableTags: string[];
   selectedTags: string[];
   onTagToggle: (tag: string) => void;
   onClearAll: () => void;
@@ -31,87 +22,64 @@ interface FilterModalProps {
 export function FilterModal({
   open,
   onClose,
-  filters,
+  availableTags,
   selectedTags,
   onTagToggle,
   onClearAll,
 }: FilterModalProps) {
+  const categorize = (tag: string) => {
+    const normalized = tag.toLowerCase();
+    const styles = ['elegant', 'minimalist', 'casual', 'modern', 'contemporary', 'sporty', 'luxury', 'designer'];
+    const garments = ['dress', 'blazer', 'suit', 'top', 'gown', 'ensemble', 'skirt', 'coat', 'jacket'];
+    const descriptors = ['formal', 'professional', 'tailored', 'flowing', 'fitted', 'dramatic'];
+
+    if (styles.some((value) => normalized.includes(value))) return 'style';
+    if (garments.some((value) => normalized.includes(value))) return 'garment';
+    if (descriptors.some((value) => normalized.includes(value))) return 'descriptor';
+    return 'other';
+  };
+
+  const categories = {
+    style: availableTags.filter((tag) => categorize(tag) === 'style'),
+    garment: availableTags.filter((tag) => categorize(tag) === 'garment'),
+    descriptor: availableTags.filter((tag) => categorize(tag) === 'descriptor'),
+    other: availableTags.filter((tag) => categorize(tag) === 'other'),
+  };
+
   const handleOpenChange = (state: boolean) => {
     if (!state) {
       onClose();
     }
   };
 
-  const sections: Array<{
-    key: keyof FilterGroups;
-    label: string;
-    isColor?: boolean;
-  }> = [
-    { key: 'style', label: 'Style Tags' },
-    { key: 'garment', label: 'Garment' },
-    { key: 'silhouette', label: 'Silhouette' },
-    { key: 'color', label: 'Color', isColor: true },
-    { key: 'fabric', label: 'Fabric' },
-    { key: 'lighting', label: 'Lighting/Specs' },
-  ];
-
-  const renderBadge = (tag: string, isColor: boolean) => {
-    const isSelected = selectedTags.includes(tag);
-
-    return (
-      <Badge
-        key={tag}
-        variant={isSelected ? 'default' : 'outline'}
-        className={`cursor-pointer px-3 py-1.5 transition-all ${
-          isSelected
-            ? 'bg-[#6366f1] text-white hover:bg-[#4f46e5]'
-            : 'hover:bg-gray-100'
-        }`}
-        onClick={() => onTagToggle(tag)}
-      >
-        {isColor ? (
-          <span
-            aria-hidden
-            className="mr-2 inline-flex h-3 w-3 rounded-full border border-gray-300 align-middle"
-            style={{ backgroundColor: tag }}
-          />
-        ) : null}
-        {tag}
-      </Badge>
-    );
-  };
-
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-2xl bg-white text-gray-900 border border-gray-200 shadow-2xl">
+      <DialogContent className="sm:max-w-2xl max-h-[80vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="text-lg font-semibold text-gray-900">
-            Filter Gallery
-          </DialogTitle>
-          <DialogDescription className="text-sm text-gray-500">
-            Combine style tags, garments, and colour palettes to narrow your
-            collection.
+          <DialogTitle>Filter Gallery</DialogTitle>
+          <DialogDescription>
+            Select tags to filter your design collection
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-6 py-4">
           {selectedTags.length > 0 && (
             <div>
-              <div className="mb-3 flex items-center justify-between">
-                <p className="text-sm text-gray-700">Active filters</p>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm text-gray-700">Selected Filters</p>
                 <Button variant="ghost" size="sm" onClick={onClearAll}>
-                  Clear all
+                  Clear All
                 </Button>
               </div>
               <div className="flex flex-wrap gap-2">
                 {selectedTags.map((tag) => (
                   <Badge
-                    key={`selected-${tag}`}
-                    className="cursor-pointer bg-[#6366f1] px-3 py-1.5 text-white hover:bg-[#4f46e5]"
+                    key={tag}
+                    className="bg-[#6366f1] text-white hover:bg-[#4f46e5] cursor-pointer px-3 py-1.5"
                     onClick={() => onTagToggle(tag)}
                   >
                     {tag}
-                    <X className="ml-1.5 h-3 w-3" />
+                    <X className="w-3 h-3 ml-1.5" />
                   </Badge>
                 ))}
               </div>
@@ -119,24 +87,44 @@ export function FilterModal({
             </div>
           )}
 
-          {sections.map(({ key, label, isColor }) => {
-            const options = filters[key];
-            if (!options || options.length === 0) {
-              return null;
-            }
+          {categories.style.length > 0 && (
+            <CategorySection
+              title="Style"
+              tags={categories.style}
+              selectedTags={selectedTags}
+              onTagToggle={onTagToggle}
+            />
+          )}
 
-            return (
-              <div key={key}>
-                <p className="mb-3 text-sm text-gray-700">{label}</p>
-                <div className="flex flex-wrap gap-2">
-                  {options.map((tag) => renderBadge(tag, Boolean(isColor)))}
-                </div>
-              </div>
-            );
-          })}
+          {categories.garment.length > 0 && (
+            <CategorySection
+              title="Garment Type"
+              tags={categories.garment}
+              selectedTags={selectedTags}
+              onTagToggle={onTagToggle}
+            />
+          )}
+
+          {categories.descriptor.length > 0 && (
+            <CategorySection
+              title="Descriptors"
+              tags={categories.descriptor}
+              selectedTags={selectedTags}
+              onTagToggle={onTagToggle}
+            />
+          )}
+
+          {categories.other.length > 0 && (
+            <CategorySection
+              title="Other"
+              tags={categories.other}
+              selectedTags={selectedTags}
+              onTagToggle={onTagToggle}
+            />
+          )}
         </div>
 
-        <div className="flex justify-end gap-2 border-t pt-4">
+        <div className="flex justify-end gap-2 pt-4 border-t">
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
@@ -144,10 +132,48 @@ export function FilterModal({
             onClick={onClose}
             className="bg-[#6366f1] text-white hover:bg-[#4f46e5]"
           >
-            Apply filters
+            Apply Filters
           </Button>
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+interface CategorySectionProps {
+  title: string;
+  tags: string[];
+  selectedTags: string[];
+  onTagToggle: (tag: string) => void;
+}
+
+function CategorySection({
+  title,
+  tags,
+  selectedTags,
+  onTagToggle,
+}: CategorySectionProps) {
+  if (tags.length === 0) return null;
+
+  return (
+    <div>
+      <p className="text-sm text-gray-700 mb-3">{title}</p>
+      <div className="flex flex-wrap gap-2">
+        {tags.map((tag) => (
+          <Badge
+            key={tag}
+            variant={selectedTags.includes(tag) ? 'default' : 'outline'}
+            className={`cursor-pointer px-3 py-1.5 transition-all ${
+              selectedTags.includes(tag)
+                ? 'bg-[#6366f1] text-white hover:bg-[#4f46e5]'
+                : 'hover:bg-gray-100'
+            }`}
+            onClick={() => onTagToggle(tag)}
+          >
+            {tag}
+          </Badge>
+        ))}
+      </div>
+    </div>
   );
 }

@@ -20,6 +20,7 @@ const modelGenderService = require('../../services/modelGenderDetectionService')
 const promptBuilderAgent = require('../../services/advancedPromptBuilderAgent');
 const intelligentPromptBuilder = require('../../services/IntelligentPromptBuilder');
 const PromptBuilderRouter = require('../../services/promptBuilderRouter');
+const r2Storage = require('../../services/r2Storage');
 
 // Create router with 10% traffic to new system
 const promptRouter = new PromptBuilderRouter(10);
@@ -44,6 +45,106 @@ const validationAgent = require('../../services/validationAgent');
 const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
+
+const DEFAULT_SIGNED_URL_TTL = 3600 * 24 * 7; // 7 days
+const SIGNED_URL_TTL_SECONDS = Number(process.env.R2_SIGNED_URL_TTL) > 0
+  ? Number(process.env.R2_SIGNED_URL_TTL)
+  : DEFAULT_SIGNED_URL_TTL;
+
+const FORCE_SIGNED_URLS = process.env.R2_USE_SIGNED_URLS === 'true';
+const PLACEHOLDER_CDN_HOSTS = new Set(['images.designerbff.com']);
+
+const isPlaceholderCdnUrl = (value) => {
+  if (!value) return true;
+  try {
+    const { hostname } = new URL(value);
+    return PLACEHOLDER_CDN_HOSTS.has(hostname.toLowerCase());
+  } catch (error) {
+    return true;
+  }
+};
+
+const resolveGenerationAssetUrl = async ({
+  url,
+  cdnUrl,
+  urlUpscaled,
+  assetUrl,
+  r2Key,
+  r2KeyUpscaled,
+  assetR2Key,
+  generationId,
+}) => {
+  const fallbackUrl = urlUpscaled || url || cdnUrl || assetUrl || null;
+  const signingKey = r2KeyUpscaled || r2Key || assetR2Key || null;
+  const shouldSign =
+    Boolean(signingKey) &&
+    typeof r2Storage?.isConfigured === 'function' &&
+    r2Storage.isConfigured() &&
+    (FORCE_SIGNED_URLS || isPlaceholderCdnUrl(fallbackUrl));
+
+  if (shouldSign) {
+    try {
+      return await r2Storage.getSignedUrl(signingKey, SIGNED_URL_TTL_SECONDS);
+    } catch (error) {
+      logger.warn('Failed to sign generation asset URL; falling back to stored path', {
+        generationId,
+        signingKey,
+        error: error.message,
+      });
+    }
+  }
+
+  return fallbackUrl;
+};
+
+const shouldSignPortfolioImageUrl = (image, fallbackUrl) => {
+  if (!image?.r2_key) return false;
+  if (FORCE_SIGNED_URLS) return true;
+  if (!fallbackUrl) return true;
+  if (fallbackUrl.includes('X-Amz-Signature')) return true;
+  return isPlaceholderCdnUrl(fallbackUrl);
+};
+
+const resolvePortfolioImageUrls = async (images = []) => {
+  if (!Array.isArray(images) || images.length === 0) {
+    return [];
+  }
+
+  const canSign =
+    typeof r2Storage?.isConfigured === 'function' && r2Storage.isConfigured();
+
+  return Promise.all(
+    images.map(async (image) => {
+      const fallbackUrl =
+        image.url ||
+        image.url_preview ||
+        image.url_original ||
+        image.image_url ||
+        null;
+
+      if (canSign && shouldSignPortfolioImageUrl(image, fallbackUrl)) {
+        try {
+          const signedUrl = await r2Storage.getSignedUrl(
+            image.r2_key,
+            SIGNED_URL_TTL_SECONDS
+          );
+          return { ...image, url: signedUrl };
+        } catch (error) {
+          logger.warn(
+            'Failed to sign portfolio image URL; falling back to stored URL',
+            {
+              imageId: image.id,
+              r2Key: image.r2_key,
+              error: error.message,
+            }
+          );
+        }
+      }
+
+      return { ...image, url: fallbackUrl };
+    })
+  );
+};
 
 // Configure multer for file uploads
 const upload = multer({
@@ -346,12 +447,21 @@ router.get('/profile', authMiddleware, asyncHandler(async (req, res) => {
 
     // Get portfolio images
     const imagesQuery = `
-      SELECT pi.id, pi.filename, pi.url_original as url, pi.width, pi.height, pi.created_at as uploaded_at
+      SELECT 
+        pi.id, 
+        pi.filename, 
+        pi.url_original, 
+        pi.url_preview,
+        pi.r2_key,
+        pi.width, 
+        pi.height, 
+        pi.created_at as uploaded_at
       FROM portfolio_images pi
       WHERE pi.portfolio_id = $1
       ORDER BY pi.created_at DESC
     `;
     const imagesResult = await db.query(imagesQuery, [profile.portfolio_id]);
+    const portfolioImages = await resolvePortfolioImageUrls(imagesResult.rows);
 
     // Parse JSON fields (they're stored as strings in DB)
     const parseJSON = (field) => {
@@ -404,7 +514,7 @@ router.get('/profile', authMiddleware, asyncHandler(async (req, res) => {
     logger.info('Podna: Style profile fetched successfully', { 
       userId, 
       profileId: profile.id,
-      imageCount: imagesResult.rows.length,
+      imageCount: portfolioImages.length,
       clustersCount: clusters.length,
       styleLabelsCount: styleLabels.length
     });
@@ -430,7 +540,7 @@ router.get('/profile', authMiddleware, asyncHandler(async (req, res) => {
           constructionPatterns: parseJSON(profile.construction_patterns),
           signaturePieces: parseJSON(profile.signature_pieces),
           updatedAt: profile.updated_at,
-          portfolioImages: imagesResult.rows
+          portfolioImages
         },
         brandDNA: brandDNA ? {
           primaryAesthetic: brandDNA.primaryAesthetic,
@@ -490,18 +600,27 @@ router.get('/portfolio/:portfolioId/images', authMiddleware, asyncHandler(async 
   }
 
   const imagesQuery = `
-    SELECT id, filename, url_original as url, width, height, created_at as uploaded_at
+    SELECT 
+      id, 
+      filename, 
+      url_original,
+      url_preview,
+      r2_key,
+      width, 
+      height, 
+      created_at as uploaded_at
     FROM portfolio_images
     WHERE portfolio_id = $1
     ORDER BY created_at DESC
   `;
   const imagesResult = await db.query(imagesQuery, [portfolioId]);
+  const images = await resolvePortfolioImageUrls(imagesResult.rows);
 
   res.json({
     success: true,
     data: {
       portfolioId,
-      images: imagesResult.rows
+      images
     }
   });
 }));
@@ -723,13 +842,27 @@ router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
     }
 
     // STEP 5: Build enhanced response with interpretation details
+    const generationImageUrl = await resolveGenerationAssetUrl({
+      url: generation.url,
+      urlUpscaled: generation.url_upscaled,
+      r2Key: generation.r2_key,
+      r2KeyUpscaled: generation.r2_key_upscaled,
+      generationId: generation.id,
+    });
+
+    if (!generationImageUrl) {
+      logger.warn('Podna: Unable to resolve accessible URL for generation', {
+        generationId: generation.id,
+      });
+    }
+
     const response = {
       success: true,
       message: 'Image generated successfully',
       data: {
         generation: {
           id: generation.id,
-          url: generation.url,
+          url: generationImageUrl,
           prompt: generation.prompt_text || promptText,
           promptText: generation.prompt_text || promptText,
           prompt_text: generation.prompt_text || promptText,
@@ -779,14 +912,25 @@ router.post('/generate', authMiddleware, asyncHandler(async (req, res) => {
  */
 router.post('/generate-with-dna', authMiddleware, asyncHandler(async (req, res) => {
   try {
-    const { userId } = req.user;
-    const { 
-      prompt, 
-      enforceBrandDNA = true, 
+    const userId = req.user?.id;
+
+    if (!userId) {
+      logger.warn('Podna: Missing user ID on generate-with-dna request');
+      return res.status(401).json({
+        success: false,
+        message: 'User authentication required'
+      });
+    }
+
+    const {
+      prompt,
+      enforceBrandDNA = true,
       brandDNAStrength = 0.8,
       creativity = 0.3,
       count = 4,
-      options = {} 
+      options = {},
+      interpretPrompt: interpretPromptInput = true,
+      provider = 'imagen-4-ultra',
     } = req.body;
 
     if (!prompt || !prompt.trim()) {
@@ -796,83 +940,228 @@ router.post('/generate-with-dna', authMiddleware, asyncHandler(async (req, res) 
       });
     }
 
-    // Get enhanced style profile
-    const styleProfile = await intelligentPromptBuilder.getEnhancedStyleProfile(userId);
-    
-    if (!styleProfile && enforceBrandDNA) {
-      return res.status(400).json({
-        success: false,
-        message: 'No style profile found. Please upload a portfolio first.',
-        code: 'NO_STYLE_PROFILE'
-      });
+    const promptText = prompt.trim();
+    const interpretPrompt = interpretPromptInput !== false;
+    const shouldEnforceBrandDNA = interpretPrompt && enforceBrandDNA;
+    const generationOptions = {
+      ...options,
+      provider: options?.provider || provider,
+    };
+    generationOptions.provider = imageGenerationAgent.normalizeProvider(generationOptions.provider);
+
+    let brandDNA = null;
+    let enforceBrandDNAEffective = shouldEnforceBrandDNA;
+    if (shouldEnforceBrandDNA) {
+      const styleProfile = await intelligentPromptBuilder.getEnhancedStyleProfile(userId);
+
+      if (!styleProfile) {
+        // Do not hard fail — proceed without Brand DNA
+        logger.warn('Podna: No style profile found; proceeding without Brand DNA', { userId });
+        enforceBrandDNAEffective = false;
+      } else {
+        brandDNA = intelligentPromptBuilder.extractBrandDNA(styleProfile);
+      }
     }
 
-    // Extract brand DNA
-    const brandDNA = styleProfile 
-      ? intelligentPromptBuilder.extractBrandDNA(styleProfile)
-      : null;
-
-    logger.info('Generating with brand DNA', {
+    logger.info('Podna: Preparing generation prompt', {
       userId,
-      prompt: prompt.substring(0, 50),
-      enforceBrandDNA,
+      prompt: promptText.substring(0, 50),
+      interpretPrompt,
+      enforceBrandDNA: enforceBrandDNAEffective,
       hasBrandDNA: !!brandDNA,
       brandConfidence: brandDNA?.overallConfidence
     });
 
-    // Generate enhanced prompt
-    const promptResult = await intelligentPromptBuilder.generatePrompt(userId, {
-      ...options,
-      creativity,
-      brandDNA,
-      enforceBrandDNA,
-      brandDNAStrength,
-      userPrompt: prompt
-    });
+    const buildPromptArtifact = (rawPromptResult) => {
+      if (!rawPromptResult) return null;
 
-    const dnaPromptText =
-      promptResult.positive_prompt ||
-      promptResult.text ||
-      promptResult.prompt ||
-      null;
-    const dnaPromptMetadataRaw =
-      (promptResult && typeof promptResult.metadata === 'object' && promptResult.metadata) ||
-      (promptResult && typeof promptResult.json_spec === 'object' && promptResult.json_spec) ||
-      {};
-    const { metadata: dnaNormalizedMetadata, tags: dnaDerivedTags } =
-      normalizePromptMetadata(dnaPromptMetadataRaw);
+      const metadataCandidate =
+        (rawPromptResult && typeof rawPromptResult.metadata === 'object' && rawPromptResult.metadata) ||
+        null;
+      const specCandidate =
+        (rawPromptResult && typeof rawPromptResult.json_spec === 'object' && rawPromptResult.json_spec) ||
+        null;
+      const metadataRaw = specCandidate || metadataCandidate || {};
+
+      const { metadata: normalizedMetadata, tags: derivedTags } =
+        normalizePromptMetadata(metadataRaw);
+
+      const positivePrompt =
+        rawPromptResult.positive_prompt ||
+        rawPromptResult.text ||
+        rawPromptResult.prompt ||
+        promptText;
+
+      const negativePrompt =
+        rawPromptResult.negative_prompt ||
+        rawPromptResult.negativePrompt ||
+        options?.negativePrompt ||
+        intelligentPromptBuilder.DEFAULT_NEGATIVE_PROMPT;
+
+      const brandConsistencyScore = (() => {
+        if (rawPromptResult?.metadata && typeof rawPromptResult.metadata === 'object') {
+          const score = rawPromptResult.metadata.brand_consistency_score;
+          return typeof score === 'number' ? score : null;
+        }
+        if (normalizedMetadata?.brand_consistency_score !== undefined) {
+          const score = normalizedMetadata.brand_consistency_score;
+          return typeof score === 'number' ? score : null;
+        }
+        return null;
+      })();
+
+      return {
+        raw: rawPromptResult,
+        promptId: rawPromptResult.prompt_id || rawPromptResult.id || null,
+        positivePrompt,
+        negativePrompt,
+        metadataRaw,
+        normalizedMetadata,
+        derivedTags,
+        brandConsistencyScore,
+        brandDNAApplied: enforceBrandDNAEffective,
+      };
+    };
+
+    const promptArtifacts = [];
+
+    if (!interpretPrompt) {
+      const literalMetadata = {
+        source: 'user_literal',
+        enforceBrandDNA: false,
+        creativity,
+        brand_consistency_score: null,
+      };
+      const negativePrompt =
+        options?.negativePrompt || intelligentPromptBuilder.DEFAULT_NEGATIVE_PROMPT;
+
+      const literalRecord = await intelligentPromptBuilder.savePrompt(userId, {
+        positive_prompt: promptText,
+        negative_prompt: negativePrompt,
+        metadata: literalMetadata,
+        creativity,
+      });
+
+      const literalResult = {
+        positive_prompt: promptText,
+        negative_prompt: negativePrompt,
+        metadata: literalMetadata,
+        prompt_id: literalRecord.id,
+      };
+
+      for (let i = 0; i < count; i++) {
+        const artifact = buildPromptArtifact(literalResult);
+        if (artifact) {
+          promptArtifacts.push(artifact);
+        }
+      }
+    } else {
+      const baseBuilderOptions = {
+        ...options,
+        creativity,
+        brandDNA,
+        enforceBrandDNA: enforceBrandDNAEffective,
+        brandDNAStrength,
+        userPrompt: promptText,
+      };
+
+      for (let i = 0; i < count; i++) {
+        try {
+          const promptVariant = await intelligentPromptBuilder.generatePrompt(userId, {
+            ...baseBuilderOptions,
+            useCache: false, // ensure variations
+            variationSeed: Date.now() + i,
+            generationIndex: i,
+          });
+
+          const artifact = buildPromptArtifact(promptVariant);
+          if (artifact) {
+            promptArtifacts.push(artifact);
+          }
+        } catch (promptError) {
+          logger.error('Prompt generation failed for batch item', {
+            userId,
+            index: i,
+            error: promptError.message,
+          });
+        }
+      }
+    }
+
+    if (promptArtifacts.length === 0) {
+      throw new Error('Failed to prepare prompts for generation');
+    }
 
     // Generate images
-    const generations = [];
+    const generationResults = [];
 
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < promptArtifacts.length; i++) {
+      const artifact = promptArtifacts[i];
+
+      if (!artifact?.promptId) {
+        logger.warn('Skipping generation due to missing prompt ID', {
+          userId,
+          index: i,
+        });
+        continue;
+      }
+
       try {
-        const generation = await imageGenerationAgent.generateImage(userId, promptResult.prompt_id, options);
+        const generation = await imageGenerationAgent.generateImage(
+          userId,
+          artifact.promptId,
+          generationOptions
+        );
 
         const existingTags = Array.isArray(generation.tags)
           ? generation.tags.filter((value) => typeof value === 'string' && value.trim())
           : [];
 
-        generation.prompt_text = generation.prompt_text || dnaPromptText;
-        generation.prompt_metadata = generation.prompt_metadata || dnaPromptMetadataRaw;
-        generation.metadata = {
-          ...(generation.metadata || {}),
-          ...dnaNormalizedMetadata,
-        };
-        if (!generation.metadata.spec) {
-          generation.metadata.spec = dnaPromptMetadataRaw;
+        generation.prompt_text = generation.prompt_text || artifact.positivePrompt;
+        generation.prompt_metadata = generation.prompt_metadata || artifact.metadataRaw;
+
+        const mergedMetadata = { ...(generation.metadata || {}) };
+        const normalizedMetadata = artifact.normalizedMetadata || {};
+
+        Object.entries(normalizedMetadata).forEach(([key, value]) => {
+          if (value === undefined || value === null) return;
+          if (mergedMetadata[key] === undefined || mergedMetadata[key] === null) {
+            mergedMetadata[key] = value;
+          }
+        });
+
+        if (!mergedMetadata.spec) {
+          mergedMetadata.spec = artifact.metadataRaw;
         }
-        if (!generation.metadata.generatedAt && generation.created_at) {
-          generation.metadata.generatedAt = generation.created_at;
+
+        if (
+          normalizedMetadata.promptGroup &&
+          !mergedMetadata.promptGroup
+        ) {
+          mergedMetadata.promptGroup = normalizedMetadata.promptGroup;
         }
-        generation.tags = Array.from(new Set([...existingTags, ...dnaDerivedTags]));
-        
-        // Add brand consistency score to generation
-        generation.brand_consistency_score = promptResult.metadata.brand_consistency_score;
-        generation.brand_dna_applied = enforceBrandDNA;
-        
-        generations.push(generation);
-        
+
+        if (!mergedMetadata.generatedAt && generation.created_at) {
+          mergedMetadata.generatedAt = generation.created_at;
+        }
+
+        generation.metadata = mergedMetadata;
+
+        const combinedTags = new Set([
+          ...existingTags,
+          ...(Array.isArray(artifact.derivedTags) ? artifact.derivedTags : []),
+        ]);
+        generation.tags = Array.from(combinedTags);
+
+        if (
+          generation.brand_consistency_score === undefined ||
+          generation.brand_consistency_score === null
+        ) {
+          generation.brand_consistency_score = artifact.brandConsistencyScore;
+        }
+        generation.brand_dna_applied = enforceBrandDNAEffective;
+
+        generationResults.push({ generation, artifact });
       } catch (genError) {
         logger.error('Individual generation failed', {
           userId,
@@ -882,44 +1171,120 @@ router.post('/generate-with-dna', authMiddleware, asyncHandler(async (req, res) 
       }
     }
 
-    if (generations.length === 0) {
+    if (generationResults.length === 0) {
       throw new Error('All generations failed');
     }
+
+    const brandConsistencySum = generationResults.reduce(
+      (sum, item) => sum + (item.generation.brand_consistency_score || 0.5),
+      0
+    );
 
     res.json({
       success: true,
       data: {
-        generations: generations.map((g) => {
-          const promptTextValue = g.prompt_text || dnaPromptText;
-          return {
-            id: g.id,
-            url: g.url,
-            createdAt: g.created_at,
-            prompt: promptTextValue,
-            promptText: promptTextValue,
-            prompt_text: promptTextValue,
-            metadata: g.metadata || g.prompt_metadata || null,
-            promptMetadata: g.prompt_metadata || null,
-            tags: Array.isArray(g.tags) ? g.tags : dnaDerivedTags,
-            provider: g.provider,
-            costCents: g.cost_cents ?? null,
-            brandConsistencyScore: g.brand_consistency_score,
-            brandDNAApplied: g.brand_dna_applied
-          };
-        }),
-        prompt: promptResult,
+        generations: await Promise.all(
+          generationResults.map(async ({ generation: g, artifact }) => {
+            const promptTextValue = g.prompt_text || artifact.positivePrompt || promptText;
+
+            let effectiveUrl = await resolveGenerationAssetUrl({
+              url: g.url,
+              cdnUrl: g.cdn_url,
+              urlUpscaled: g.url_upscaled,
+              r2Key: g.r2_key,
+              r2KeyUpscaled: g.r2_key_upscaled,
+              generationId: g.id,
+            });
+
+            if (!effectiveUrl) {
+              try {
+                const assetResult = await db.query(
+                  `
+                  SELECT cdn_url, r2_key
+                  FROM generation_assets
+                  WHERE generation_id = $1::text
+                  ORDER BY created_at DESC
+                  LIMIT 1
+                  `,
+                  [g.id]
+                );
+
+                const asset = assetResult.rows[0];
+                if (asset) {
+                  effectiveUrl = await resolveGenerationAssetUrl({
+                    assetUrl: asset.cdn_url,
+                    assetR2Key: asset.r2_key,
+                    generationId: g.id,
+                  });
+                }
+              } catch (assetError) {
+                logger.warn('Failed to resolve generation asset URL', {
+                  generationId: g.id,
+                  error: assetError.message
+                });
+              }
+            }
+
+            if (!effectiveUrl) {
+              logger.warn('Generation missing URL after asset lookup', {
+                generationId: g.id,
+                hasR2Key: !!g.r2_key
+              });
+            }
+
+            const baseMetadata = (g.metadata && typeof g.metadata === 'object')
+              ? g.metadata
+              : (g.prompt_metadata && typeof g.prompt_metadata === 'object')
+                ? g.prompt_metadata
+                : null;
+            const responseMetadata = baseMetadata ? { ...baseMetadata } : {};
+            if (!responseMetadata.generationMethod) {
+              responseMetadata.generationMethod = 'generate_endpoint';
+            }
+
+            return {
+              id: g.id,
+              url: effectiveUrl,
+              createdAt: g.created_at,
+              prompt: promptTextValue,
+              promptText: promptTextValue,
+              prompt_text: promptTextValue,
+              metadata: responseMetadata,
+              promptMetadata: g.prompt_metadata || null,
+              tags: Array.isArray(g.tags) ? g.tags : artifact.derivedTags,
+              provider: g.provider,
+              costCents: g.cost_cents ?? null,
+              brandConsistencyScore: g.brand_consistency_score,
+              brandDNAApplied: g.brand_dna_applied
+            };
+          })
+        ),
+        prompt: promptArtifacts[0]?.raw || null,
+        prompts: promptArtifacts.map((artifact) => ({
+          promptId: artifact.promptId,
+          prompt: artifact.positivePrompt,
+          negativePrompt: artifact.negativePrompt,
+          metadata: artifact.metadataRaw,
+          derivedTags: artifact.derivedTags,
+          brandConsistencyScore: artifact.brandConsistencyScore,
+        })),
         brandDNA: brandDNA ? {
           primaryAesthetic: brandDNA.primaryAesthetic,
           signatureElements: {
-            colors: brandDNA.signatureColors.slice(0, 3).map(c => c.name),
-            fabrics: brandDNA.signatureFabrics.slice(0, 3).map(f => f.name),
-            construction: brandDNA.signatureConstruction.slice(0, 3).map(c => c.detail)
+            colors: (brandDNA.signatureColors || []).slice(0, 3).map((c) => c.name),
+            fabrics: (brandDNA.signatureFabrics || []).slice(0, 3).map((f) => f.name),
+            construction: (brandDNA.signatureConstruction || []).slice(0, 3).map((c) => c.detail)
           },
           confidence: brandDNA.overallConfidence
         } : null,
-        avgBrandConsistency: generations.reduce((sum, g) => 
-          sum + (g.brand_consistency_score || 0.5), 0
-        ) / generations.length
+        avgBrandConsistency: brandConsistencySum / generationResults.length,
+        settings: {
+          interpretPrompt,
+          enforceBrandDNA: shouldEnforceBrandDNA,
+          creativity,
+          brandDNAStrength: shouldEnforceBrandDNA ? brandDNAStrength : 0,
+          provider: generationOptions.provider,
+        }
       }
     });
 
@@ -943,7 +1308,7 @@ router.post('/generate-with-dna', authMiddleware, asyncHandler(async (req, res) 
  */
 router.post('/generate/batch', authMiddleware, asyncHandler(async (req, res) => {
   const userId = req.user.id;
-  const { count = 10, mode = 'exploratory', provider = 'imagen-4-ultra' } = req.body;
+  const { count = 5, mode = 'exploratory', provider = 'imagen-4-ultra' } = req.body;
 
   logger.info('Podna: Generating batch', { userId, count, mode });
 
@@ -987,29 +1352,83 @@ router.post('/generate/batch', authMiddleware, asyncHandler(async (req, res) => 
       data: {
         count: generations.length,
         totalCostCents: totalCost,
-        generations: generations.map(g => {
+        generations: await Promise.all(generations.map(async (g) => {
           const promptText = g.prompt_text || g.promptText || g.prompt || null;
           const promptMetadata = g.prompt_metadata || g.promptMetadata || null;
-          const normalizedMetadata = g.metadata || promptMetadata || null;
+          const normalizedMetadata = (g.metadata && typeof g.metadata === 'object')
+            ? g.metadata
+            : (promptMetadata && typeof promptMetadata === 'object')
+              ? promptMetadata
+              : {};
           const tags = Array.isArray(g.tags)
             ? g.tags.filter(tag => typeof tag === 'string' && tag.trim())
             : [];
 
+          let effectiveUrl = await resolveGenerationAssetUrl({
+            url: g.url,
+            cdnUrl: g.cdn_url,
+            urlUpscaled: g.url_upscaled,
+            r2Key: g.r2_key,
+            r2KeyUpscaled: g.r2_key_upscaled,
+            generationId: g.id,
+          });
+
+          if (!effectiveUrl) {
+            try {
+              const assetResult = await db.query(
+                `
+                  SELECT cdn_url, r2_key
+                  FROM generation_assets
+                  WHERE generation_id = $1::text
+                  ORDER BY created_at DESC
+                  LIMIT 1
+                `,
+                [g.id]
+                );
+
+              const asset = assetResult.rows[0];
+              if (asset) {
+                effectiveUrl = await resolveGenerationAssetUrl({
+                  assetUrl: asset.cdn_url,
+                  assetR2Key: asset.r2_key,
+                  generationId: g.id,
+                });
+              }
+            } catch (assetError) {
+              logger.warn('Failed to resolve batch generation asset URL', {
+                generationId: g.id,
+                error: assetError.message
+              });
+            }
+          }
+
+          if (!effectiveUrl) {
+            logger.warn('Batch generation missing URL after asset lookup', {
+              generationId: g.id,
+              hasR2Key: !!g.r2_key
+            });
+          }
+
+          const responseMetadata = { ...normalizedMetadata };
+          if (!responseMetadata.generationMethod) {
+            responseMetadata.generationMethod = 'batch_generation';
+          }
+
           return {
             id: g.id,
-            url: g.url,
+            url: effectiveUrl,
             createdAt: g.created_at || g.createdAt || new Date().toISOString(),
             promptId: g.prompt_id,
             prompt: promptText,
             promptText,
             prompt_text: promptText,
-            metadata: normalizedMetadata,
+            metadata: responseMetadata,
             promptMetadata,
             tags,
             provider: g.provider,
             costCents: g.cost_cents ?? null
           };
-        })
+        }))
       }
     });
 
@@ -1037,11 +1456,24 @@ router.get('/gallery', authMiddleware, asyncHandler(async (req, res) => {
 
   // Modified to return all generated images, excluding archived by default
   // Add archived filter based on query parameter
+  // Also join a representative asset so we always have a URL even when g.url is null
   const query = `
-    SELECT g.*, p.text as prompt_text, p.json_spec
+    SELECT 
+      g.*, 
+      p.text AS prompt_text, 
+      p.json_spec,
+      ga.cdn_url    AS asset_cdn_url,
+      ga.r2_key     AS asset_r2_key
     FROM generations g
     JOIN prompts p ON g.prompt_id = p.id
-    WHERE g.user_id = $1 AND g.archived = $3
+    LEFT JOIN LATERAL (
+      SELECT cdn_url, r2_key
+      FROM generation_assets
+      WHERE generation_id = g.id::text
+      ORDER BY id ASC
+      LIMIT 1
+    ) ga ON TRUE
+    WHERE g.user_id = $1::uuid AND g.archived = $3::boolean
     ORDER BY g.created_at DESC
     LIMIT $2
   `;
@@ -1049,25 +1481,73 @@ router.get('/gallery', authMiddleware, asyncHandler(async (req, res) => {
   const result = await db.query(query, [userId, limit, archived]);
   const generations = result.rows;
 
-  const generationsWithMetadata = generations.map((g) => {
-    const promptMetadataRaw = g.json_spec || g.prompt_metadata || {};
-    const { metadata: normalizedMetadata, tags: derivedTags } = normalizePromptMetadata(promptMetadataRaw);
-    const promptText = g.prompt_text || g.prompt || null;
+  const generationsWithMetadata = await Promise.all(
+    generations.map(async (g) => {
+      const promptMetadataRaw = g.json_spec || g.prompt_metadata || {};
+      const { metadata: normalizedMetadata, tags: derivedTags } = normalizePromptMetadata(promptMetadataRaw);
+      const promptText = g.prompt_text || g.prompt || null;
 
-    return {
-      id: g.id,
-      url: g.url,
-      createdAt: g.created_at,
-      prompt: promptText,
-      promptText,
-      prompt_text: promptText,
-      metadata: normalizedMetadata,
-      promptMetadata: promptMetadataRaw,
-      tags: derivedTags,
-      provider: g.provider,
-      costCents: g.cost_cents ?? null
-    };
-  });
+      const effectiveUrl = await resolveGenerationAssetUrl({
+        url: g.url,
+        urlUpscaled: g.url_upscaled,
+        assetUrl: g.asset_cdn_url,
+        r2Key: g.r2_key,
+        r2KeyUpscaled: g.r2_key_upscaled,
+        assetR2Key: g.asset_r2_key,
+        generationId: g.id,
+      });
+
+      let generationMethod = normalizedMetadata?.generationMethod;
+      if (!generationMethod) {
+        const settingsRaw = g.settings;
+        let settingsObj = null;
+        if (settingsRaw && typeof settingsRaw === 'string') {
+          try {
+            settingsObj = JSON.parse(settingsRaw);
+          } catch (err) {
+            logger.warn('Failed to parse generation settings JSON', {
+              generationId: g.id,
+              error: err.message
+            });
+          }
+        } else if (settingsRaw && typeof settingsRaw === 'object') {
+          settingsObj = settingsRaw;
+        }
+
+        if (settingsObj && typeof settingsObj === 'object') {
+          const candidate = settingsObj.generationMethod;
+          if (typeof candidate === 'string' && candidate.trim()) {
+            generationMethod = candidate;
+          } else if (settingsObj.batchCount || settingsObj.mode === 'exploratory') {
+            generationMethod = 'batch_generation';
+          }
+        }
+      }
+
+      if (!generationMethod) {
+        generationMethod = 'generate_endpoint';
+      }
+
+      const responseMetadata = {
+        ...(normalizedMetadata || {}),
+        generationMethod,
+      };
+
+      return {
+        id: g.id,
+        url: effectiveUrl,
+        createdAt: g.created_at,
+        prompt: promptText,
+        promptText,
+        prompt_text: promptText,
+        metadata: responseMetadata,
+        promptMetadata: promptMetadataRaw,
+        tags: derivedTags,
+        provider: g.provider,
+        costCents: g.cost_cents ?? null,
+      };
+    })
+  );
 
   res.json({
     success: true,

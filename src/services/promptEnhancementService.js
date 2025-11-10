@@ -21,8 +21,8 @@ class PromptEnhancementService {
       ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
       : null;
     
-    // Default to Claude if available, otherwise GPT
-    this.defaultProvider = this.anthropic ? 'claude' : 'openai';
+    // Default to OpenAI if available, otherwise Claude
+    this.defaultProvider = this.openai ? 'openai' : 'claude';
     
     if (!this.anthropic && !this.openai) {
       logger.warn('No AI provider configured for prompt enhancement');
@@ -94,41 +94,55 @@ class PromptEnhancementService {
    * ADDED: Interpret using Claude
    */
   async interpretWithClaude(userPrompt, brandDNA, options) {
-    const systemPrompt = this.buildInterpretationSystemPrompt(brandDNA);
-    const userMessage = this.buildInterpretationUserPrompt(userPrompt, brandDNA);
+    try {
+      const systemPrompt = this.buildInterpretationSystemPrompt(brandDNA);
+      const userMessage = this.buildInterpretationUserPrompt(userPrompt, brandDNA);
 
-    const response = await this.anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 1500,
-      temperature: 0.3, // Lower temperature for more consistent parsing
-      system: systemPrompt,
-      messages: [
-        { role: 'user', content: userMessage }
-      ]
-    });
+      const response = await this.anthropic.messages.create({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 1500,
+        temperature: 0.3, // Lower temperature for more consistent parsing
+        system: systemPrompt,
+        messages: [
+          { role: 'user', content: userMessage }
+        ]
+      });
 
-    const content = response.content[0].text;
-    return this.parseInterpretationResponse(content, userPrompt, brandDNA);
+      const content = response.content[0].text;
+      return this.parseInterpretationResponse(content, userPrompt, brandDNA);
+    } catch (error) {
+      logger.warn('Claude interpretation failed, using fallback', {
+        error: error.message
+      });
+      return this.fallbackInterpretation(userPrompt, brandDNA);
+    }
   }
 
   /**
    * ADDED: Interpret using GPT
    */
   async interpretWithGPT(userPrompt, brandDNA, options) {
-    const systemPrompt = this.buildInterpretationSystemPrompt(brandDNA);
-    const userMessage = this.buildInterpretationUserPrompt(userPrompt, brandDNA);
+    try {
+      const systemPrompt = this.buildInterpretationSystemPrompt(brandDNA);
+      const userMessage = this.buildInterpretationUserPrompt(userPrompt, brandDNA);
 
-    const response = await this.openai.chat.completions.create({
-      model: 'gpt-4-turbo-preview',
-      temperature: 0.3,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage }
-      ]
-    });
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-4-turbo-preview',
+        temperature: 0.3,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage }
+        ]
+      });
 
-    const content = response.choices[0].message.content;
-    return this.parseInterpretationResponse(content, userPrompt, brandDNA);
+      const content = response.choices[0].message.content;
+      return this.parseInterpretationResponse(content, userPrompt, brandDNA);
+    } catch (error) {
+      logger.warn('GPT interpretation failed, using fallback', {
+        error: error.message
+      });
+      return this.fallbackInterpretation(userPrompt, brandDNA);
+    }
   }
 
   /**

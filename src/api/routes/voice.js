@@ -56,32 +56,72 @@ router.post('/process-text', asyncHandler(async (req, res) => {
 
   try {
     const parsedCommand = await parseVoiceCommand(command, uid);
-    
-        // Generate images based on parsed command
+
+    // Generate images based on parsed command
     let generationResult = null;
     if (parsedCommand.quantity > 0) {
       logger.info('Initiating image generation from voice command', {
         userId: uid,
         command: command.substring(0, 100),
-        requestedQuantity: parsedCommand.quantity
+        requestedQuantity: parsedCommand.quantity,
+        displayQuery: parsedCommand.displayQuery,
+        garmentType: parsedCommand.garmentType
       });
 
-      // Ensure we generate the requested number of separate images
-      const generationOptions = {
-        numberOfImages: parsedCommand.quantity,
-        separateGeneration: true, // Force separate generations
-        enhancedPrompt: parsedCommand.enhancedPrompt
-      };
-      
       try {
+        // FIXED: Generate N unique prompts using the enhanced prompt as base
+        // Create variations from the already-enhanced prompt from parseVoiceCommand
+        const prompts = [];
+        for (let i = 0; i < parsedCommand.quantity; i++) {
+          // Use the enhanced prompt that was already generated with style profile + brand DNA
+          const promptResult = await IntelligentPromptBuilder.generatePrompt(uid, {
+            // Base the prompt on the already-enhanced request
+            basePrompt: parsedCommand.enhancedPrompt,
+            garmentType: parsedCommand.garmentType,
+            
+            // Preserve user modifiers and specificity from the parsed command
+            userModifiers: parsedCommand.parsedPrompt?.userModifiers || [],
+            
+            // Use specificity analysis from voice command parsing
+            specificityScore: parsedCommand.specificityAnalysis?.specificityScore || 0.5,
+            creativity: parsedCommand.specificityAnalysis?.creativityTemp || 0.3,
+            parsedUserPrompt: parsedCommand.parsedPrompt,
+            
+            // Generation settings for variety
+            enforceBrandDNA: true,
+            brandDNAStrength: 0.8,
+            useCache: false, // Don't cache - we want variations
+            variationSeed: Date.now() + i, // Unique seed for each
+            generationIndex: i, // For model gender alternation
+            enablePrecisionTokens: false
+          });
+
+          prompts.push({
+            positive: promptResult.positive_prompt,
+            negative: promptResult.negative_prompt,
+            metadata: promptResult.metadata
+          });
+
+          logger.info(`Generated unique prompt ${i + 1}/${parsedCommand.quantity} from enhanced base`, {
+            userId: uid,
+            garmentType: parsedCommand.garmentType,
+            baseEnhancedPrompt: parsedCommand.enhancedPrompt.substring(0, 60),
+            promptPreview: promptResult.positive_prompt.substring(0, 80),
+            specificity: parsedCommand.specificityAnalysis?.specificityScore
+          });
+        }
+
+        // Generate images with individual prompts
         generationResult = await generationService.generateFromPrompt({
-        prompt: parsedCommand.enhancedPrompt,
-        negativePrompt: parsedCommand.negativePrompt,
-        ...generationOptions,
-        userId: uid,
-        batchMode: true, // Enable batch mode for multiple images
-        individualPrompts: true // Generate unique prompt for each image
-      });
+          userId: uid,
+          prompts, // Pass array of unique prompts
+          batchMode: true,
+          individualPrompts: true,
+          settings: {
+            generationMethod: 'voice_command'
+          }
+        });
+
       } catch (genError) {
         logger.error('Image generation from voice command failed', {
           error: genError.message,
@@ -89,13 +129,48 @@ router.post('/process-text', asyncHandler(async (req, res) => {
         });
       }
     }
-    
+
+    // Format generation result for frontend consumption
+    let formattedGeneration = null;
+    if (generationResult && generationResult.images) {
+      // Convert images array to assets format expected by Home page
+      formattedGeneration = {
+        ...generationResult,
+        assets: generationResult.images.map((img) => ({
+          id: img.id,
+          url: img.imageUrl || img.url,
+          cdnUrl: img.imageUrl || img.url,
+          prompt: img.prompt,
+          promptText: img.prompt,
+          metadata: img.metadata || {},
+          createdAt: img.createdAt || new Date().toISOString(),
+          origin: 'voice_command',
+          tags: ['voice-generated']
+        }))
+      };
+
+      logger.info('Formatted generation result for frontend', {
+        userId: uid,
+        imageCount: formattedGeneration.assets.length
+      });
+    }
+
     res.json({
       success: true,
       data: {
+        // What the user said (for transparency)
+        displayQuery: parsedCommand.displayQuery,
         originalCommand: command,
+
+        // Enhanced prompt sent to API (for power users)
+        enhancedPrompt: parsedCommand.enhancedPrompt,
+        negativePrompt: parsedCommand.negativePrompt,
+
+        // Parsed command details
         parsedCommand,
-        generation: generationResult,
+
+        // Generation results (formatted for frontend)
+        generation: formattedGeneration,
         timestamp: new Date().toISOString()
       }
     });
@@ -185,14 +260,55 @@ router.post('/process-audio', upload.single('audio'), asyncHandler(async (req, r
       });
       
       try {
+        // Generate N unique prompts using the enhanced prompt as base
+        // Create variations for batch audio generation
+        const prompts = [];
+        for (let i = 0; i < parsedCommand.quantity; i++) {
+          // Use the enhanced prompt that was already generated with style profile + brand DNA
+          const promptResult = await IntelligentPromptBuilder.generatePrompt(uid, {
+            // Base the prompt on the already-enhanced request
+            basePrompt: parsedCommand.enhancedPrompt,
+            garmentType: parsedCommand.garmentType,
+            
+            // Preserve user modifiers and specificity from the parsed command
+            userModifiers: parsedCommand.parsedPrompt?.userModifiers || [],
+            
+            // Use specificity analysis from voice command parsing
+            specificityScore: parsedCommand.specificityAnalysis?.specificityScore || 0.5,
+            creativity: parsedCommand.specificityAnalysis?.creativityTemp || 0.3,
+            parsedUserPrompt: parsedCommand.parsedPrompt,
+            
+            // Generation settings for variety
+            enforceBrandDNA: true,
+            brandDNAStrength: 0.8,
+            useCache: false, // Don't cache - we want variations
+            variationSeed: Date.now() + i, // Unique seed for each
+            generationIndex: i, // For model gender alternation
+            enablePrecisionTokens: false
+          });
+
+          prompts.push({
+            positive: promptResult.positive_prompt,
+            negative: promptResult.negative_prompt,
+            metadata: promptResult.metadata
+          });
+
+          logger.info(`Generated unique prompt ${i + 1}/${parsedCommand.quantity} from enhanced base (audio)`, {
+            userId: uid,
+            garmentType: parsedCommand.garmentType,
+            baseEnhancedPrompt: parsedCommand.enhancedPrompt.substring(0, 60),
+            promptPreview: promptResult.positive_prompt.substring(0, 80),
+            specificity: parsedCommand.specificityAnalysis?.specificityScore
+          });
+        }
+
         generationResult = await generationService.generateFromPrompt({
           userId: uid,
-          prompt: parsedCommand.enhancedPrompt,
-          negativePrompt: parsedCommand.negativePrompt,
+          prompts, // Pass array of unique prompts
+          batchMode: true,
+          individualPrompts: true,
           settings: {
-            count: parsedCommand.quantity,
-            provider: 'google-imagen',
-            quality: 'standard'
+            generationMethod: 'voice_command'
           }
         });
       } catch (genError) {
@@ -262,6 +378,83 @@ router.get('/commands/examples', asyncHandler(async (req, res) => {
   });
 }));
 
+// ========== HELPER: Generate Display Query ==========
+/**
+ * Generate human-readable display query from parsed command
+ * Shows user what we understood from their request
+ * @param {Object} params - Parsed command components
+ * @returns {string} Human-readable query
+ */
+function generateDisplayQuery(params) {
+  const {
+    action,
+    quantity,
+    garmentType,
+    styles = [],
+    colors = [],
+    fabrics = [],
+    occasions = [],
+    constructionDetails = [],
+    styleModifiers = []
+  } = params;
+
+  let query = '';
+
+  // Action
+  if (action === 'create' || action === 'generate' || action === 'make') {
+    query = 'Generate';
+  } else if (action === 'show') {
+    query = 'Show';
+  } else {
+    query = action.charAt(0).toUpperCase() + action.slice(1);
+  }
+
+  // Quantity
+  if (quantity > 1) {
+    query += ` ${quantity}`;
+  } else {
+    query += ' a';
+  }
+
+  // Style modifiers (e.g., "moto", "bomber")
+  if (styleModifiers.length > 0) {
+    query += ` ${styleModifiers.join(' ')}`;
+  }
+
+  // Styles (e.g., "bohemian", "minimalist")
+  if (styles.length > 0) {
+    query += ` ${styles.join(' ')}`;
+  }
+
+  // Colors
+  if (colors.length > 0) {
+    query += ` ${colors.join(' and ')}`;
+  }
+
+  // Garment type
+  query += ` ${garmentType}`;
+  if (quantity > 1 && !garmentType.endsWith('s')) {
+    query += 's';
+  }
+
+  // Fabrics
+  if (fabrics.length > 0) {
+    query += ` in ${fabrics.join(' and ')}`;
+  }
+
+  // Construction details
+  if (constructionDetails.length > 0) {
+    query += ` with ${constructionDetails.join(' and ')}`;
+  }
+
+  // Occasions
+  if (occasions.length > 0) {
+    query += ` for ${occasions.join(' and ')} occasions`;
+  }
+
+  return query;
+}
+
 // ========== ENHANCED parseVoiceCommand FUNCTION ==========
 /**
  * Parse voice command with specificity analysis
@@ -273,24 +466,72 @@ async function parseVoiceCommand(command, userId = null) {
   const cleanCommand = command.toLowerCase().trim();
   
   // Process command using QueryProcessingService
-  const processedQuery = await queryProcessor.processQuery(cleanCommand, userId);
-  
+  let processedQuery;
+  try {
+    processedQuery = await queryProcessor.processQuery(cleanCommand, userId);
+  } catch (error) {
+    logger.error('Query processing failed, using fallback parsing', {
+      error: error.message,
+      command: cleanCommand
+    });
+    // Fallback to basic parsing if query processor fails
+    processedQuery = {
+      success: true,
+      originalQuery: cleanCommand,
+      queryType: 'specific',
+      intent: { action: 'make', count: 1, specificity: 'specific', confidence: 0.5 },
+      entities: {
+        count: 1,
+        garmentType: 'dress',
+        styles: [],
+        colors: [],
+        fabrics: [],
+        occasions: [],
+        constructionDetails: [],
+        styleModifiers: []
+      },
+      structuredQuery: { count: 1 }
+    };
+  }
+
   // Extract core information from processed query
-  const quantity = processedQuery.entities.quantity || 1;
+  const quantity = processedQuery.entities.count || processedQuery.structuredQuery?.count || 1;
   const action = processedQuery.intent?.action || 'create';
-  const garmentType = processedQuery.entities.garmentType;
+  let garmentType = processedQuery.entities.garmentType;
+  // Infer garment type directly from the user's phrasing when the query processor returns something generic
+  const inferredGarment = inferGarmentTypeFromCommand(cleanCommand);
+  if ((!garmentType || garmentType === 'outfit' || garmentType === 'dress') && inferredGarment) {
+    logger.info('Garment type overridden by direct command inference', {
+      originalGarmentType: garmentType,
+      inferredGarment
+    });
+    garmentType = inferredGarment;
+  }
+
   // Normalize garment type early to avoid accidental ReferenceErrors later
   const normalizedGarmentType = normalizeGarmentType(garmentType || 'outfit');
 
   // Get structured data from processed query
   const {
-    styles = [],
-    colors = [],
-    fabrics = [],
-    occasions = [],
-    constructionDetails = [],
-    styleModifiers = []
+    styles: qpStyles = [],
+    colors: qpColors = [],
+    fabrics: qpFabrics = [],
+    occasions: qpOccasions = [],
+    constructionDetails: qpConstructionDetails = [],
+    styleModifiers: qpStyleModifiers = []
   } = processedQuery.entities;
+
+  // Fallback extractions to capture literal user descriptors missed by the LLM parser
+  const styles = qpStyles.length > 0 ? qpStyles : extractStyles(cleanCommand);
+  const colors = qpColors.length > 0 ? qpColors : extractColors(cleanCommand);
+  const fabrics = qpFabrics.length > 0 ? qpFabrics : extractFabrics(cleanCommand);
+  const occasions = qpOccasions.length > 0 ? qpOccasions : extractOccasions(cleanCommand);
+  const constructionDetails = qpConstructionDetails.length > 0
+    ? qpConstructionDetails
+    : extractConstructionDetails(cleanCommand);
+  const styleModifiers = qpStyleModifiers.length > 0
+    ? qpStyleModifiers
+    : extractStyleModifiers(cleanCommand);
 
   // Use processed query's specificity analysis
   const specificityAnalysis = processedQuery.specificity || specificityAnalyzer.analyzeCommand(command, {
@@ -311,6 +552,37 @@ async function parseVoiceCommand(command, userId = null) {
     mode: specificityAnalysis.mode
   });
   // ===============================================
+
+  // Ensure downstream prompt builder honors literal intent from this command
+  const baseModifiers = processedQuery.entities.modifiers || [];
+  const aggregatedModifiers = Array.from(
+    new Set([
+      ...baseModifiers,
+      ...styles,
+      ...styleModifiers,
+      ...constructionDetails,
+      ...colors,
+      ...fabrics,
+      ...occasions
+    ].filter(Boolean))
+  );
+
+  const parsedPromptPayload = {
+    text: command,
+    garmentType: normalizedGarmentType,
+    colors,
+    fabrics,
+    styleAdjectives: styles,
+    styleModifiers,
+    constructionDetails,
+    userModifiers: aggregatedModifiers,
+    occasion: occasions[0] || processedQuery.entities.occasion,
+    season: processedQuery.entities.season,
+    specificity: mapSpecificityLevel(specificityAnalysis.specificityScore),
+    specificityScore: specificityAnalysis.specificityScore,
+    count: quantity
+  };
+  processedQuery.entities.modifiers = aggregatedModifiers;
 
   // Fetch user's style profile and generate prompt
   let styleProfile = null;
@@ -333,7 +605,7 @@ async function parseVoiceCommand(command, userId = null) {
         const generatedPrompt = await IntelligentPromptBuilder.generatePrompt(userId, {
           // Base garment request
           garmentType: processedQuery.entities.garmentType,
-          quantity: processedQuery.entities.quantity || 1,
+          quantity: quantity,
           
           // Style profile integration
           styleProfile: stylePreferences,
@@ -347,8 +619,9 @@ async function parseVoiceCommand(command, userId = null) {
           creativity: specificityAnalysis.creativityTemp,
           
           // User modifications (if any)
-          userModifiers: processedQuery.entities.modifiers || [],
+          userModifiers: parsedPromptPayload.userModifiers,
           respectUserIntent: specificityAnalysis.specificityScore > 0.7,
+          parsedUserPrompt: parsedPromptPayload,
           
           // Additional context
           season: processedQuery.entities.season,
@@ -356,7 +629,8 @@ async function parseVoiceCommand(command, userId = null) {
           
           // Generation settings
           useCache: false, // Ensure fresh prompts for each generation
-          variationSeed: Date.now()
+          variationSeed: Date.now(),
+          enablePrecisionTokens: false
         });
         // =====================================================================
         
@@ -387,12 +661,14 @@ async function parseVoiceCommand(command, userId = null) {
   if (!enhancedPrompt) {
     const defaultPrompt = await IntelligentPromptBuilder.generatePrompt(null, {
       garmentType: processedQuery.entities.garmentType,
-      quantity: processedQuery.entities.quantity || 1,
+      quantity: quantity,
       useDefaultProfile: true,
       queryType: processedQuery.queryType,
       specificityScore: specificityAnalysis.specificityScore,
-      userModifiers: processedQuery.entities.modifiers || [],
-      mode: 'balanced'
+      userModifiers: parsedPromptPayload.userModifiers,
+      mode: 'balanced',
+      parsedUserPrompt: parsedPromptPayload,
+      enablePrecisionTokens: false
     });
     
     enhancedPrompt = defaultPrompt.positive_prompt;
@@ -403,6 +679,19 @@ async function parseVoiceCommand(command, userId = null) {
       garmentType: processedQuery.entities.garmentType
     });
   }
+
+  // Generate human-readable display query from parsed command
+  const displayQuery = generateDisplayQuery({
+    action,
+    quantity,
+    garmentType: normalizedGarmentType,
+    styles,
+    colors,
+    fabrics,
+    occasions,
+    constructionDetails,
+    styleModifiers
+  });
 
   return {
     action,
@@ -416,7 +705,9 @@ async function parseVoiceCommand(command, userId = null) {
       constructionDetails,  // NEW
       styleModifiers        // NEW
     },
+    parsedPrompt: parsedPromptPayload,
     specificityAnalysis, // NEW: Include full analysis
+    displayQuery,         // NEW: Human-readable query for UI
     vltSpecification: enhancedPrompt,
     enhancedPrompt,
     negativePrompt,
@@ -538,6 +829,39 @@ function normalizeGarmentType(garmentType) {
   };
   
   return mappings[garmentType] || garmentType;
+}
+
+function inferGarmentTypeFromCommand(command) {
+  const garmentDictionary = {
+    jacket: ['jacket', 'jackets', 'blazer', 'blazers', 'bomber', 'bomber jacket', 'moto jacket', 'denim jacket', 'leather jacket', 'trench', 'trench coat', 'parka', 'windbreaker'],
+    coat: ['coat', 'coats', 'overcoat', 'topcoat', 'outercoat'],
+    dress: ['dress', 'dresses', 'gown', 'gowns', 'sheath', 'slip dress'],
+    outfit: ['outfit', 'outfits', 'look', 'looks', 'ensemble'],
+    suit: ['suit', 'suits', 'pantsuit', 'skirt suit'],
+    skirt: ['skirt', 'skirts'],
+    pants: ['pants', 'trousers', 'slacks', 'jeans'],
+    top: ['top', 'tops', 'shirt', 'shirts', 'blouse', 'blouses', 'tee', 't-shirt'],
+    shorts: ['shorts', 'bermuda shorts'],
+    jumpsuit: ['jumpsuit', 'romper', 'rompers', 'catsuit'],
+    swimwear: ['swimsuit', 'swimwear', 'bikini', 'bikinis']
+  };
+
+  for (const [canonical, variations] of Object.entries(garmentDictionary)) {
+    for (const variation of variations) {
+      const pattern = new RegExp(`\\b${variation.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      if (pattern.test(command)) {
+        return canonical;
+      }
+    }
+  }
+
+  return null;
+}
+
+function mapSpecificityLevel(score) {
+  if (score >= 0.7) return 'high';
+  if (score >= 0.4) return 'medium';
+  return 'low';
 }
 
 function generateVLTSpecification(params) {

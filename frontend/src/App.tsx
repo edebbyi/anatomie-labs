@@ -15,10 +15,21 @@ import { Toaster } from './components/ui/sonner';
 const hasCompletedOnboarding = (): boolean => {
   if (typeof window === 'undefined') return false;
   const stored = window.localStorage.getItem('userProfile');
-  if (!stored) return false;
+  if (stored) {
+    try {
+      const profile = JSON.parse(stored);
+      if (profile?.onboardingComplete) return true;
+    } catch {
+      // ignore parse issues and fall back to other sources
+    }
+  }
+
+  const currentUserRaw = window.localStorage.getItem('currentUser');
+  if (!currentUserRaw) return false;
+
   try {
-    const profile = JSON.parse(stored);
-    return Boolean(profile?.onboardingComplete);
+    const currentUser = JSON.parse(currentUserRaw);
+    return Boolean(currentUser?.onboardingComplete);
   } catch {
     return false;
   }

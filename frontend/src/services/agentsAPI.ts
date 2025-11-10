@@ -6,6 +6,16 @@
 import axios from 'axios';
 import { AGENTS_API_URL } from '../config/env';
 
+// Determine if we're talking to the Node proxy (mounted at /api/agents)
+// versus the standalone Python service (default http://localhost:8000)
+const isProxiedService = (() => {
+  try {
+    return typeof AGENTS_API_URL === 'string' && AGENTS_API_URL.includes('/api/agents');
+  } catch {
+    return false;
+  }
+})();
+
 const agentsHTTP = axios.create({
   baseURL: AGENTS_API_URL,
   headers: {
@@ -119,10 +129,18 @@ export const portfolioAPI = {
     success: boolean;
     profile_data: StyleProfile;
   }> => {
-    const url = version 
-      ? `/portfolio/profile/${designerId}?version=${version}`
-      : `/portfolio/profile/${designerId}`;
-    
+    // Node proxy endpoint uses the authenticated user and does not accept designerId in path
+    const url = (() => {
+      if (isProxiedService) {
+        return typeof version === 'number'
+          ? `/portfolio/profile?version=${version}`
+          : `/portfolio/profile`;
+      }
+      return typeof version === 'number'
+        ? `/portfolio/profile/${designerId}?version=${version}`
+        : `/portfolio/profile/${designerId}`;
+    })();
+
     const response = await agentsHTTP.get(url);
     return response.data;
   },
@@ -132,13 +150,29 @@ export const portfolioAPI = {
    */
   hasProfile: async (designerId: string): Promise<boolean> => {
     try {
-      await portfolioAPI.getProfile(designerId);
+      const result: any = await portfolioAPI.getProfile(designerId);
+
+      // Python service shape: throws 404 when profile not found
+      // Node proxy shape: returns { success: true, data: { hasProfile: boolean, profile: ... }}
+      if (result && typeof result === 'object') {
+        if ('profile_data' in result) {
+          return Boolean(result.profile_data);
+        }
+        if ('data' in result && result.data && typeof result.data === 'object') {
+          if (typeof result.data.hasProfile === 'boolean') {
+            return result.data.hasProfile;
+          }
+          if ('profile' in result.data) {
+            return Boolean(result.data.profile);
+          }
+        }
+      }
       return true;
     } catch (error: any) {
-      if (error.response?.status === 404) {
+      if (error?.response?.status === 404) {
         return false;
       }
-      throw error;
+      return false;
     }
   }
 };

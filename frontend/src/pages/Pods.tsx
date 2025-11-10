@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Folder,
   FolderPlus,
@@ -14,6 +15,7 @@ import {
   Check,
   Layers,
   Trash2,
+  PencilLine,
 } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -453,9 +455,11 @@ const PodTabs: React.FC<PodTabsProps> = ({ pods, currentPodId, onSelect, onCreat
 };
 
 const PodsPage: React.FC = () => {
+  const navigate = useNavigate();
   const {
     pods,
     likedImages,
+    podImages,
     loading,
     error,
     overlayVisible,
@@ -466,6 +470,8 @@ const PodsPage: React.FC = () => {
     assignImageToPods,
     removeImagesFromPod,
     unlikeImages,
+    loadPodImages,
+    updatePod,
   } = usePods();
 
   const [currentPodId, setCurrentPodId] = useState<string>('all');
@@ -474,10 +480,26 @@ const PodsPage: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
   const [createName, setCreateName] = useState<string>('');
   const [createDescription, setCreateDescription] = useState<string>('');
-  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [lightboxState, setLightboxState] = useState<{
+    images: {
+      id: string;
+      url: string;
+      prompt: string;
+      timestamp: string;
+      metadata?: GalleryImage['metadata'];
+      tags?: string[];
+      groupId?: string | null;
+      groupIndex?: number | null;
+      groupSize?: number | null;
+    }[];
+    index: number;
+  } | null>(null);
   const [activeQuickAction, setActiveQuickAction] = useState<string | null>(null);
   const [addMenuOpen, setAddMenuOpen] = useState<boolean>(false);
   const [isSubmittingPod, setIsSubmittingPod] = useState<boolean>(false);
+  const [isEditingDescription, setIsEditingDescription] = useState<boolean>(false);
+  const [descriptionDraft, setDescriptionDraft] = useState<string>('');
+  const [isSavingDescription, setIsSavingDescription] = useState<boolean>(false);
 
   useEffect(() => {
     if (currentPodId !== 'all' && !pods.find((pod) => pod.id === currentPodId)) {
@@ -487,8 +509,17 @@ const PodsPage: React.FC = () => {
 
   const visibleImages = useMemo(() => {
     if (currentPodId === 'all') return likedImages;
+    if (podImages[currentPodId]) {
+      return podImages[currentPodId];
+    }
     return likedImages.filter((image) => image.podIds?.includes(currentPodId));
-  }, [likedImages, currentPodId]);
+  }, [likedImages, currentPodId, podImages]);
+
+  useEffect(() => {
+    if (currentPodId !== 'all') {
+      loadPodImages(currentPodId);
+    }
+  }, [currentPodId, loadPodImages]);
 
   useEffect(() => {
     setSelectedImageIds((previous) =>
@@ -511,12 +542,115 @@ const PodsPage: React.FC = () => {
     );
   };
 
+  const resolveGroupId = (image: LikedImage): string | null => {
+    if (image.groupId) return image.groupId;
+    const group = image.metadata?.promptGroup;
+    if (group && typeof group === 'object' && group !== null) {
+      const id =
+        (group as Record<string, unknown>).id ??
+        (group as Record<string, unknown>).groupId ??
+        (group as Record<string, unknown>).group_id;
+      if (typeof id === 'string' && id.trim()) return id.trim();
+    }
+    return null;
+  };
+
+  const resolveGroupIndex = (image: LikedImage): number | undefined => {
+    if (typeof image.groupIndex === 'number') return image.groupIndex;
+    const group = image.metadata?.promptGroup;
+    if (group && typeof group === 'object' && group !== null) {
+      const index =
+        (group as Record<string, unknown>).index ??
+        (group as Record<string, unknown>).groupIndex ??
+        (group as Record<string, unknown>).position;
+      if (typeof index === 'number') return index;
+      if (typeof index === 'string') {
+        const parsed = Number(index);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+    }
+    return undefined;
+  };
+
+  const resolveGroupPrompt = (image: LikedImage): string | undefined => {
+    const group = image.metadata?.promptGroup;
+    if (group && typeof group === 'object' && group !== null) {
+      const prompt =
+        (group as Record<string, unknown>).prompt ??
+        (group as Record<string, unknown>).text ??
+        (group as Record<string, unknown>).label;
+      if (typeof prompt === 'string' && prompt.trim()) {
+        return prompt.trim();
+      }
+    }
+    return undefined;
+  };
+
   const handleOpenLightbox = (index: number) => {
-    setLightboxIndex(index);
+    const clickedImage = visibleImages[index];
+    if (!clickedImage) return;
+
+    const groupBuckets = new Map<string, LikedImage[]>();
+    visibleImages.forEach((image) => {
+      const groupId = resolveGroupId(image);
+      if (!groupId) return;
+      const bucket = groupBuckets.get(groupId) ?? [];
+      bucket.push(image);
+      groupBuckets.set(groupId, bucket);
+    });
+
+    const seenGroups = new Set<string>();
+    const sequence: LikedImage[] = [];
+
+    visibleImages.forEach((image) => {
+      const groupId = resolveGroupId(image);
+      if (groupId) {
+        if (seenGroups.has(groupId)) return;
+        const sortedGroup = [...(groupBuckets.get(groupId) ?? [])].sort((a, b) => {
+          const indexA = resolveGroupIndex(a);
+          const indexB = resolveGroupIndex(b);
+          if (indexA !== undefined && indexB !== undefined) {
+            return indexA - indexB;
+          }
+          if (indexA !== undefined) return -1;
+          if (indexB !== undefined) return 1;
+          return 0;
+        });
+        sequence.push(...sortedGroup);
+        seenGroups.add(groupId);
+      } else {
+        sequence.push(image);
+      }
+    });
+
+    const lightboxImages = sequence.map((image) => {
+      const groupId = resolveGroupId(image);
+      const bucket = groupId ? groupBuckets.get(groupId) : undefined;
+      const groupSize = image.groupSize ?? (bucket ? bucket.length : undefined) ?? null;
+
+      return {
+        id: image.id,
+        url: image.url,
+        prompt: image.prompt || resolveGroupPrompt(image) || '',
+        timestamp: image.createdAt?.toISOString() || new Date().toISOString(),
+        metadata: image.metadata,
+        tags: image.tags,
+        groupId,
+        groupIndex: resolveGroupIndex(image) ?? null,
+        groupSize,
+      };
+    });
+
+    const startIndex = lightboxImages.findIndex((item) => item.id === clickedImage.id);
+
+    setLightboxState({
+      images: lightboxImages,
+      index: startIndex >= 0 ? startIndex : 0,
+    });
   };
 
   const handleCloseLightbox = () => {
-    setLightboxIndex(null);
+    setLightboxState(null);
   };
 
   const handleUnlikeSingle = async (imageId: string) => {
@@ -576,6 +710,30 @@ const PodsPage: React.FC = () => {
     }
   };
 
+  const handleStartEditDescription = () => {
+    if (currentPodId === 'all' || !currentPod) return;
+    setIsEditingDescription(true);
+  };
+
+  const handleCancelDescriptionEdit = () => {
+    setIsEditingDescription(false);
+    setDescriptionDraft(currentPod?.description ?? '');
+  };
+
+  const handleSaveDescription = async () => {
+    if (!currentPod || isSavingDescription) return;
+    setIsSavingDescription(true);
+    const trimmed = descriptionDraft.trim();
+    const result = await updatePod(currentPod.id, {
+      description: trimmed.length > 0 ? trimmed : null,
+    });
+    setIsSavingDescription(false);
+    if (result) {
+      setDescriptionDraft(result.description ?? '');
+      setIsEditingDescription(false);
+    }
+  };
+
   const handleOverlayCreate = async () => {
     await markIntroSeen();
     setShowCreateModal(true);
@@ -586,17 +744,20 @@ const PodsPage: React.FC = () => {
   };
 
   const currentPod = pods.find((pod) => pod.id === currentPodId);
-  const selectionCount = selectedImageIds.length;
-  const lightboxImages = visibleImages.map((image) => ({
-    id: image.id,
-    url: image.url,
-    prompt: image.prompt || '',
-    timestamp: image.createdAt?.toISOString() || new Date().toISOString(),
-    metadata: image.metadata,
-  }));
 
+  useEffect(() => {
+    if (currentPod && currentPodId !== 'all') {
+      setDescriptionDraft(currentPod.description ?? '');
+    } else {
+      setDescriptionDraft('');
+    }
+    setIsEditingDescription(false);
+    setIsSavingDescription(false);
+  }, [currentPodId, currentPod?.description, currentPod?.id]);
+  const selectionCount = selectedImageIds.length;
   const showEmptyLiked = !loading && likedImages.length === 0;
   const showEmptyPod = !loading && likedImages.length > 0 && visibleImages.length === 0;
+  const shouldShowError = Boolean(error) && !showEmptyLiked;
 
   return (
     <div className="relative min-h-screen bg-white pb-24">
@@ -655,8 +816,69 @@ const PodsPage: React.FC = () => {
             onCreate={() => setShowCreateModal(true)}
             totalLiked={likedImages.length}
           />
+          {currentPodId !== 'all' && currentPod && (
+            <div className="rounded-3xl border border-purple-100 bg-white/90 p-5 shadow-sm">
+              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                <div className="flex-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-purple-500">
+                    Pod Description
+                  </p>
+                  {isEditingDescription ? (
+                    <textarea
+                      value={descriptionDraft}
+                      onChange={(event) => setDescriptionDraft(event.target.value)}
+                      rows={3}
+                      className="mt-3 w-full rounded-2xl border border-purple-200 px-4 py-3 text-sm text-gray-800 shadow-inner focus:border-purple-400 focus:outline-none focus:ring-2 focus:ring-purple-200"
+                      placeholder="Add notes about this pod to keep things organized."
+                    />
+                  ) : (
+                    <p
+                      className={`mt-2 text-sm ${
+                        currentPod.description ? 'text-gray-700' : 'text-gray-400 italic'
+                      }`}
+                    >
+                      {currentPod.description || 'Add notes about this pod to keep things organized.'}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {isEditingDescription ? (
+                    <>
+                      <Button
+                        type="button"
+                        onClick={handleSaveDescription}
+                        disabled={isSavingDescription}
+                        className="bg-purple-500 hover:bg-purple-400"
+                      >
+                        {isSavingDescription ? 'Saving…' : 'Save'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={isSavingDescription}
+                        onClick={handleCancelDescriptionEdit}
+                        className="border-gray-200 text-gray-700 hover:bg-gray-100"
+                      >
+                        Cancel
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleStartEditDescription}
+                      className="border-purple-200 text-purple-600 hover:bg-purple-50"
+                    >
+                      <PencilLine className="mr-2 h-4 w-4" />
+                      Edit
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
-          {error && (
+          {shouldShowError && (
             <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {error}
             </div>
@@ -669,11 +891,16 @@ const PodsPage: React.FC = () => {
               <div className="flex h-16 w-16 items-center justify-center rounded-full bg-white shadow">
                 <HeartOff className="h-7 w-7 text-gray-500" />
               </div>
-              <h3 className="mt-6 text-xl font-semibold text-gray-900">No liked images yet</h3>
+              <h3 className="mt-6 text-xl font-semibold text-gray-900">No liked images</h3>
               <p className="mt-2 max-w-sm text-sm text-gray-600">
-                Generate designs and like them to start building your collection.
+                Go to Home and like a few outfits first so they appear here.
               </p>
-              <Button className="mt-6 bg-purple-500 hover:bg-purple-400">Go to Generate</Button>
+              <Button
+                className="mt-6 bg-purple-500 hover:bg-purple-400"
+                onClick={() => navigate('/home')}
+              >
+                Go to Home
+              </Button>
             </div>
           )}
 
@@ -847,8 +1074,12 @@ const PodsPage: React.FC = () => {
         </Button>
       </div>
 
-      {lightboxIndex !== null && (
-        <Lightbox images={lightboxImages} initialIndex={lightboxIndex} onClose={handleCloseLightbox} />
+      {lightboxState && (
+        <Lightbox
+          images={lightboxState.images}
+          initialIndex={lightboxState.index}
+          onClose={handleCloseLightbox}
+        />
       )}
     </div>
   );

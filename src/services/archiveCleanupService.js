@@ -10,6 +10,34 @@ const ARCHIVE_RETENTION_DAYS = 15;
 
 class ArchiveCleanupService {
   /**
+   * Ensure the generations table has archive support columns and indexes.
+   * This is idempotent and safe to call repeatedly.
+   */
+  async ensureArchiveSchema() {
+    const statements = [
+      `ALTER TABLE generations ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE`,
+      `ALTER TABLE generations ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP WITH TIME ZONE`,
+      `UPDATE generations SET archived = FALSE WHERE archived IS NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_generations_archived ON generations(archived)`,
+      `CREATE INDEX IF NOT EXISTS idx_generations_archived_at ON generations(archived_at) WHERE archived = TRUE`,
+      `CREATE INDEX IF NOT EXISTS idx_generations_user_archived ON generations(user_id, archived) WHERE archived = FALSE`
+    ];
+
+    try {
+      logger.info('Archive Cleanup: Ensuring archive support schema');
+      for (const sql of statements) {
+        await db.query(sql);
+      }
+      logger.info('Archive Cleanup: Archive support schema verified');
+    } catch (error) {
+      logger.error('Archive Cleanup: Failed to ensure archive support schema', {
+        error: error.message
+      });
+      throw error;
+    }
+  }
+
+  /**
    * Delete archived images older than 15 days
    * Should be called periodically (e.g., daily via cron job)
    */

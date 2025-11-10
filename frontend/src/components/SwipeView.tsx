@@ -29,73 +29,24 @@ export function SwipeView({
 
   const currentImage = images[currentIndex];
 
-  const resolveGeneratedAt = (image?: BasicImage) => {
-    if (!image) return undefined;
-    const source =
-      image.timestamp ||
-      (image as any).createdAt ||
-      (image as any).created_at ||
-      (image as any)?.metadata?.generatedAt ||
-      (image as any)?.metadata?.generated_at;
-
-    const parsed =
-      source instanceof Date ? source : source ? new Date(source) : undefined;
-
-    return parsed && !Number.isNaN(parsed.getTime()) ? parsed : undefined;
-  };
-
-  const generatedLabel = (() => {
-    const date = resolveGeneratedAt(currentImage);
-    if (!date) return 'Unknown';
-    return date.toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-  })();
-
-  const promptText = (() => {
-    const raw = (currentImage?.prompt || '').trim();
-    if (!raw) return 'Prompt unavailable';
-    return raw;
-  })();
-
-  const metadata = (currentImage?.metadata || {}) as Record<string, any>;
-  const tags =
-    Array.isArray(currentImage?.tags) && (currentImage.tags as string[]).length > 0
-      ? (currentImage.tags as string[])
-      : Array.isArray(metadata.styleTags)
-        ? (metadata.styleTags as string[])
-        : [];
-
-  const displayData = {
-    garment: metadata.garmentType || metadata.garment,
-    colors: Array.isArray(metadata.colors) ? metadata.colors : [],
-    fabric: metadata.fabric || metadata.texture,
-    silhouette: metadata.silhouette || metadata.silhouette_type,
-    details: metadata.details,
-    shot: metadata.shot || metadata.lighting,
-  };
-
   useEffect(() => {
-    if (currentImage) {
-      onImageViewed?.(currentImage.id);
+    if (currentImage?.id && onImageViewed) {
+      onImageViewed(currentImage.id);
     }
-  }, [currentImage, onImageViewed]);
+  }, [currentImage?.id, onImageViewed]);
 
   const handleSwipe = (dir: number) => {
+    if (!currentImage) return;
     setDirection(dir);
     if (dir > 0) {
       onLike(currentImage.id);
     } else {
       onDiscard(currentImage.id);
     }
-    
+
     setTimeout(() => {
       if (currentIndex < images.length - 1) {
-        setCurrentIndex(currentIndex + 1);
+        setCurrentIndex((prev) => prev + 1);
         setShowMetadata(false);
       } else {
         onClose();
@@ -103,22 +54,42 @@ export function SwipeView({
     }, 200);
   };
 
-  const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'ArrowLeft') handleSwipe(-1);
-    if (e.key === 'ArrowRight') handleSwipe(1);
-    if (e.key === 'Escape') onClose();
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') handleSwipe(-1);
+      if (e.key === 'ArrowRight') handleSwipe(1);
+      if (e.key === 'Escape') onClose();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentIndex, images.length, onClose]);
+
+  if (!currentImage) {
+    return null;
+  }
+
+  const resolveGeneratedAt = () => {
+    const source =
+      currentImage.timestamp ||
+      (currentImage as any).createdAt ||
+      (currentImage as any).created_at ||
+      (currentImage as any)?.metadata?.generatedAt ||
+      (currentImage as any)?.metadata?.generated_at;
+
+    const parsed =
+      source instanceof Date ? source : source ? new Date(source) : undefined;
+    return parsed && !Number.isNaN(parsed.getTime()) ? parsed : undefined;
   };
 
-  useEffect(() => {
-    const listener = handleKeyDown as unknown as EventListener;
-    window.addEventListener('keydown', listener);
-    return () => window.removeEventListener('keydown', listener);
-  });
+  const metadata = (currentImage.metadata || {}) as Record<string, any>;
+  const tags = Array.isArray(currentImage.tags) ? currentImage.tags : [];
+  const generatedLabel = resolveGeneratedAt()?.toLocaleString() ?? 'Unknown';
 
   if (mode === 'vertical') {
     return (
       <div className="fixed inset-0 bg-black z-50 overflow-y-auto snap-y snap-mandatory">
-        {/* Header */}
         <div className="fixed top-0 left-0 right-0 z-10 bg-gradient-to-b from-black/80 to-transparent p-4 flex items-center justify-between">
           <Button variant="ghost" onClick={onClose} className="text-white hover:bg-white/10">
             <X className="w-5 h-5" />
@@ -132,8 +103,7 @@ export function SwipeView({
           </Button>
         </div>
 
-        {/* Images */}
-        {images.map((image, index) => (
+        {images.map((image) => (
           <div
             key={image.id}
             className="h-screen w-full snap-start flex items-center justify-center relative"
@@ -143,8 +113,6 @@ export function SwipeView({
               alt={image.prompt}
               className="max-h-full max-w-full object-contain"
             />
-            
-            {/* Floating actions */}
             <div className="absolute left-6 top-1/2 -translate-y-1/2">
               <Button
                 onClick={() => onDiscard(image.id)}
@@ -169,7 +137,6 @@ export function SwipeView({
 
   return (
     <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
-      {/* Header */}
       <div className="absolute top-4 left-0 right-0 flex items-center justify-between px-4">
         <Button variant="ghost" onClick={onClose} className="text-white hover:bg-white/10">
           <X className="w-5 h-5" />
@@ -186,7 +153,6 @@ export function SwipeView({
         </Button>
       </div>
 
-      {/* Card */}
       <div className="max-w-2xl w-full">
         <AnimatePresence mode="wait">
           <motion.div
@@ -202,81 +168,69 @@ export function SwipeView({
             className="relative"
           >
             {!showMetadata ? (
-              // Front of card - Image
               <div className="bg-white rounded-2xl overflow-hidden shadow-2xl">
                 <img
                   src={currentImage.url}
-                  alt={currentImage.prompt}
+                  alt={currentImage.prompt ? 'Generated design' : ''}
                   className="w-full h-auto max-h-[70vh] object-contain"
+                  onError={(e) => {
+                    const el = e.currentTarget as HTMLImageElement & { dataset?: Record<string, string> };
+                    if (el.dataset && el.dataset.fallbackApplied === 'true') return;
+                    if (el.dataset) el.dataset.fallbackApplied = 'true';
+                    el.src =
+                      'data:image/svg+xml;utf8,' +
+                      encodeURIComponent(
+                        `<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1000"><rect width="100%" height="100%" fill="#111827"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#6b7280" font-family="system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial" font-size="24">Image unavailable</text></svg>`
+                      );
+                  }}
                 />
-                <div className="p-4 flex flex-wrap gap-2">
-                  {tags.map((tag, i) => (
-                    <Badge key={`${tag}-${i}`} variant="secondary">
-                      {tag}
-                    </Badge>
-                  ))}
-                </div>
+                {tags.length > 0 && (
+                  <div className="p-4 flex flex-wrap gap-2">
+                    {tags.map((tag, index) => (
+                      <Badge key={`${currentImage.id}-tag-${index}`} variant="secondary">
+                        {tag}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
               </div>
             ) : (
-              // Back of card - Metadata
               <div className="bg-white rounded-2xl overflow-hidden shadow-2xl p-6 min-h-[500px]">
                 <div className="space-y-6">
                   <div>
-                    <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">
-                      Prompt
-                    </p>
-                    <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-gray-900">
-                      {promptText}
+                    <p className="text-sm text-gray-500">Prompt</p>
+                    <p className="text-gray-900 mt-2 whitespace-pre-wrap">
+                      {(currentImage.prompt || '').trim() || 'Prompt unavailable'}
                     </p>
                   </div>
 
                   <div className="grid gap-4 md:grid-cols-2">
-                    {displayData.garment && (
-                      <div>
-                        <p className="text-sm text-gray-500">Garment</p>
-                        <p className="text-gray-900">{displayData.garment}</p>
-                      </div>
+                    {metadata.garmentType && (
+                      <MetadataItem label="Garment" value={metadata.garmentType} />
                     )}
-                    {displayData.colors.length > 0 && (
-                      <div>
-                        <p className="text-sm text-gray-500">Colors</p>
-                        <p className="text-gray-900">
-                          {displayData.colors.join(', ')}
-                        </p>
-                      </div>
+                    {Array.isArray(metadata.colors) && metadata.colors.length > 0 && (
+                      <MetadataItem label="Colors" value={metadata.colors.join(', ')} />
                     )}
-                    {displayData.fabric && (
-                      <div>
-                        <p className="text-sm text-gray-500">Fabric</p>
-                        <p className="text-gray-900">{displayData.fabric}</p>
-                      </div>
+                    {(metadata.fabric || metadata.texture) && (
+                      <MetadataItem label="Fabric" value={metadata.fabric || metadata.texture} />
                     )}
-                    {displayData.silhouette && (
-                      <div>
-                        <p className="text-sm text-gray-500">Silhouette</p>
-                        <p className="text-gray-900">{displayData.silhouette}</p>
-                      </div>
+                    {metadata.silhouette && (
+                      <MetadataItem label="Silhouette" value={metadata.silhouette} />
                     )}
-                    {displayData.details && (
-                      <div className="md:col-span-2">
-                        <p className="text-sm text-gray-500">Details</p>
-                        <p className="text-gray-900">{displayData.details}</p>
-                      </div>
+                    {metadata.details && (
+                      <MetadataItem label="Details" value={metadata.details} fullWidth />
                     )}
-                    {displayData.shot && (
-                      <div>
-                        <p className="text-sm text-gray-500">Shot</p>
-                        <p className="text-gray-900">{displayData.shot}</p>
-                      </div>
+                    {(metadata.shot || metadata.lighting) && (
+                      <MetadataItem label="Shot" value={metadata.shot || metadata.lighting} />
                     )}
                   </div>
 
                   <div>
                     <p className="text-sm text-gray-500">Tags</p>
-                    <div className="mt-2 flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-2 mt-2">
                       {tags.length > 0 ? (
-                        tags.map((tag, idx) => (
-                          <Badge key={`${tag}-${idx}`} variant="secondary">
+                        tags.map((tag, index) => (
+                          <Badge key={`${currentImage.id}-meta-tag-${index}`} variant="secondary">
                             {tag}
                           </Badge>
                         ))
@@ -296,7 +250,6 @@ export function SwipeView({
           </motion.div>
         </AnimatePresence>
 
-        {/* Controls */}
         <div className="flex items-center justify-between mt-6">
           <Button
             onClick={() => handleSwipe(-1)}
@@ -305,16 +258,14 @@ export function SwipeView({
           >
             ← Discard
           </Button>
-
           <Button
             variant="ghost"
-            onClick={() => setShowMetadata(!showMetadata)}
+            onClick={() => setShowMetadata((prev) => !prev)}
             className="text-white hover:bg-white/10"
           >
             <Info className="w-5 h-5 mr-2" />
             {showMetadata ? 'Show Image' : 'Info'}
           </Button>
-
           <Button
             onClick={() => handleSwipe(1)}
             variant="outline"
@@ -324,6 +275,21 @@ export function SwipeView({
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+interface MetadataItemProps {
+  label: string;
+  value: string;
+  fullWidth?: boolean;
+}
+
+function MetadataItem({ label, value, fullWidth }: MetadataItemProps) {
+  return (
+    <div className={fullWidth ? 'md:col-span-2' : undefined}>
+      <p className="text-sm text-gray-500">{label}</p>
+      <p className="text-gray-900">{value}</p>
     </div>
   );
 }

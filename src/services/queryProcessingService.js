@@ -105,6 +105,11 @@ Respond in JSON format:
 }`;
 
     try {
+      if (!this.openaiApiKey) {
+        logger.warn('No OpenAI API key available, using fallback intent parsing');
+        return this.fallbackIntentParsing(query);
+      }
+
       const response = await axios.post(
         this.apiUrl,
         {
@@ -126,7 +131,7 @@ Respond in JSON format:
 
       const content = response.data.choices[0].message.content;
       const intent = JSON.parse(content);
-      
+
       return intent;
 
     } catch (error) {
@@ -165,6 +170,11 @@ Respond in JSON format:
 }`;
 
     try {
+      if (!this.openaiApiKey) {
+        logger.warn('No OpenAI API key available, using fallback entity extraction');
+        return this.fallbackEntityExtraction(query);
+      }
+
       const response = await axios.post(
         this.apiUrl,
         {
@@ -186,7 +196,7 @@ Respond in JSON format:
 
       const content = response.data.choices[0].message.content;
       const entities = JSON.parse(content);
-      
+
       return entities;
 
     } catch (error) {

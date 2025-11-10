@@ -1,3 +1,5 @@
+const { deriveConsistentTags } = require('../services/taggingAgent');
+
 const normalizeColorEntry = (entry) => {
   if (!entry) return null;
   if (typeof entry === 'string') return entry;
@@ -217,13 +219,38 @@ const normalizePromptMetadata = (input = {}) => {
     .filter((value) => typeof value === 'string' && value.trim())
     .forEach((value) => tagSet.add(value.trim()));
 
-  metadata.colors.forEach((color) => tagSet.add(color));
-  metadata.styleTags.forEach((tag) => tagSet.add(tag));
+  (metadata.colors || []).forEach((color) => tagSet.add(color));
+  (metadata.styleTags || []).forEach((tag) => tagSet.add(tag));
   toUniqueStringArray(selection?.construction).forEach((entry) => tagSet.add(entry));
+
+  const candidateTags = Array.from(tagSet).filter(Boolean);
+  const rawTags = Array.isArray(input.tags) ? input.tags : [];
+
+  const taggingResult = deriveConsistentTags({
+    metadata,
+    rawTags: candidateTags.concat(rawTags),
+    prompt:
+      input.prompt ||
+      input.prompt_text ||
+      input.promptText ||
+      (typeof spec === 'object' ? spec?.promptText || spec?.mainPrompt : undefined),
+  });
+
+  if (taggingResult.style && !metadata.styleTag) {
+    metadata.styleTag = taggingResult.style;
+  }
+  if (taggingResult.garment && !metadata.garmentTag) {
+    metadata.garmentTag = taggingResult.garment;
+  }
+  if (taggingResult.color && !metadata.primaryColor) {
+    metadata.primaryColor = taggingResult.color;
+  }
+
+  const normalizedTags = taggingResult.tags.length > 0 ? taggingResult.tags : candidateTags;
 
   return {
     metadata,
-    tags: Array.from(tagSet).filter(Boolean),
+    tags: normalizedTags,
   };
 };
 

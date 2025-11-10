@@ -22,7 +22,7 @@ export function GeneratePage({ onGenerate }: GeneratePageProps) {
     {
       icon: Zap,
       title: 'QUICK TEST',
-      count: 10,
+      count: 5,
       time: '~1 min',
       description: 'Perfect for quick iterations',
     },

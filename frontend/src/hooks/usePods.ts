@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import authAPI from '../services/authAPI';
 import { API_URL } from '../config/env';
 import type { PodSummary } from '../types/pods';
 import type { LikedImage, GalleryImage } from '../types/images';
-import { normalizeLikedImage, normalizePodSummary } from '../utils/pods';
+import { normalizeLikedImage, normalizePodImage, normalizePodSummary } from '../utils/pods';
 import { normalizeGalleryImage } from '../utils/gallery';
 
 type CreatePodInput = {
@@ -14,6 +14,7 @@ type CreatePodInput = {
 type UsePodsResult = {
   pods: PodSummary[];
   likedImages: LikedImage[];
+  podImages: Record<string, LikedImage[]>;
   loading: boolean;
   error: string | null;
   hasSeenPodsIntro: boolean;
@@ -25,6 +26,11 @@ type UsePodsResult = {
   assignImageToPods: (imageId: string, podIds: string[]) => Promise<string[]>;
   removeImagesFromPod: (podId: string, imageIds: string[]) => Promise<void>;
   unlikeImages: (imageIds: string[]) => Promise<void>;
+  loadPodImages: (podId: string, options?: { force?: boolean }) => Promise<void>;
+  updatePod: (
+    podId: string,
+    patch: { name?: string; description?: string | null }
+  ) => Promise<PodSummary | null>;
 };
 
 const ensureArray = <T,>(value: T[] | undefined | null): T[] => {
@@ -35,11 +41,13 @@ const ensureArray = <T,>(value: T[] | undefined | null): T[] => {
 const usePods = (): UsePodsResult => {
   const [pods, setPods] = useState<PodSummary[]>([]);
   const [likedImages, setLikedImages] = useState<LikedImage[]>([]);
+  const [podImages, setPodImages] = useState<Record<string, LikedImage[]>>({});
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [hasSeenPodsIntro, setHasSeenPodsIntro] = useState<boolean>(false);
   const [overlayVisible, setOverlayVisible] = useState<boolean>(false);
   const [introSeenAt, setIntroSeenAt] = useState<string | null>(null);
+  const podImagesLoaded = useRef<Set<string>>(new Set());
 
   const getStorageKey = useCallback(() => {
     const currentUser = authAPI.getCurrentUser();
@@ -69,6 +77,9 @@ const usePods = (): UsePodsResult => {
           metadata: img.metadata,
           createdAt: img.timestamp,
           likedAt: img.lastInteractedAt || img.timestamp,
+          groupId: img.groupId,
+          groupIndex: img.groupIndex,
+          groupSize: img.groupSize,
           podIds: [],
         }));
     } catch (err) {
@@ -101,6 +112,8 @@ const usePods = (): UsePodsResult => {
     if (!headers) {
       setPods([]);
       setLikedImages(readLocalLikedImages());
+      setPodImages({});
+      podImagesLoaded.current.clear();
       setHasSeenPodsIntro(false);
       setOverlayVisible(false);
       setLoading(false);
@@ -133,6 +146,8 @@ const usePods = (): UsePodsResult => {
         const message = `Failed to load pods (${podsResponse.status})`;
         setError(message);
         setPods([]);
+        setPodImages({});
+        podImagesLoaded.current.clear();
       } else {
         try {
           const podsJson = await parseJson(podsResponse);
@@ -141,6 +156,27 @@ const usePods = (): UsePodsResult => {
             .map(normalizePodSummary)
             .filter((pod): pod is PodSummary => Boolean(pod?.id));
           setPods(normalizedPods);
+          setPodImages((previous) => {
+            if (!normalizedPods.length) {
+              podImagesLoaded.current.clear();
+              return {};
+            }
+
+            const next: Record<string, LikedImage[]> = {};
+            normalizedPods.forEach((pod) => {
+              if (pod.id && previous[pod.id]) {
+                next[pod.id] = previous[pod.id];
+              }
+            });
+
+            podImagesLoaded.current.forEach((podId) => {
+              if (!normalizedPods.some((pod) => pod.id === podId)) {
+                podImagesLoaded.current.delete(podId);
+              }
+            });
+
+            return next;
+          });
           const preferences = podsJson?.data?.preferences || {};
           const seen = Boolean(preferences.hasSeenPodsIntro);
           setHasSeenPodsIntro(seen);
@@ -152,6 +188,8 @@ const usePods = (): UsePodsResult => {
         } catch (err) {
           console.warn('Pods API response was not JSON', err);
           setPods([]);
+          setPodImages({});
+          podImagesLoaded.current.clear();
         }
       }
 
@@ -180,6 +218,8 @@ const usePods = (): UsePodsResult => {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
       setPods([]);
+      setPodImages({});
+      podImagesLoaded.current.clear();
       setLikedImages(readLocalLikedImages());
     } finally {
       setLoading(false);
@@ -195,6 +235,78 @@ const usePods = (): UsePodsResult => {
       !hasSeenPodsIntro && pods.length === 0 && likedImages.length > 0;
     setOverlayVisible(shouldShowIntro);
   }, [hasSeenPodsIntro, pods.length, likedImages.length, introSeenAt]);
+
+  const loadPodImages = useCallback(
+    async (podId: string, options: { force?: boolean } = {}) => {
+      if (!podId || podId === 'all') return;
+
+      const headers = authHeaders();
+      if (!headers) return;
+
+      const force = Boolean(options.force);
+      if (!force && podImagesLoaded.current.has(podId)) {
+        return;
+      }
+
+      if (force) {
+        podImagesLoaded.current.delete(podId);
+      }
+
+      try {
+        const response = await fetch(`${API_URL}/pods/${podId}/images`, {
+          headers: {
+            Authorization: headers.Authorization,
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to load pod images (${response.status})`);
+        }
+
+        const json = await response.json();
+        const rawImages = ensureArray(json?.data?.images);
+        const normalized = rawImages
+          .map(normalizePodImage)
+          .filter((image): image is LikedImage => Boolean(image));
+
+        setPodImages((previous) => ({
+          ...previous,
+          [podId]: normalized,
+        }));
+        setLikedImages((previous) => {
+          if (normalized.length === 0) return previous;
+          const map = new Map(previous.map((image) => [image.id, image]));
+          let changed = false;
+
+          normalized.forEach((image) => {
+            const existing = map.get(image.id);
+            if (existing) {
+              const merged = Array.from(
+                new Set([...(existing.podIds || []), ...(image.podIds || [])])
+              );
+              const prevKey = (existing.podIds || []).join('|');
+              const nextKey = merged.join('|');
+              if (prevKey !== nextKey) {
+                map.set(image.id, { ...existing, podIds: merged });
+                changed = true;
+              }
+            } else {
+              map.set(image.id, image);
+              changed = true;
+            }
+          });
+
+          return changed ? Array.from(map.values()) : previous;
+        });
+        podImagesLoaded.current.add(podId);
+      } catch (err) {
+        setError((prev) =>
+          prev ?? (err instanceof Error ? err.message : 'Failed to load pod images')
+        );
+      }
+    },
+    [authHeaders]
+  );
 
   const markIntroSeen = useCallback(
     async ({ dismissed = false } = {}) => {
@@ -251,6 +363,46 @@ const usePods = (): UsePodsResult => {
     [authHeaders]
   );
 
+  const updatePod = useCallback(
+    async (
+      podId: string,
+      patch: { name?: string; description?: string | null }
+    ) => {
+      if (!podId) return null;
+      const headers = authHeaders();
+      if (!headers) return null;
+
+      try {
+        const response = await fetch(`${API_URL}/pods/${podId}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify(patch),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to update pod (${response.status})`);
+        }
+
+        const json = await response.json();
+        const updated = normalizePodSummary(json?.data?.pod);
+
+        if (updated?.id) {
+          setPods((previous) =>
+            previous.map((pod) => (pod.id === updated.id ? updated : pod))
+          );
+        }
+
+        return updated ?? null;
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : 'Failed to update pod settings'
+        );
+        return null;
+      }
+    },
+    [authHeaders]
+  );
+
   const addImagesToPod = useCallback(
     async (podId: string, imageIds: string[]) => {
       if (!podId || !Array.isArray(imageIds) || imageIds.length === 0) {
@@ -278,6 +430,7 @@ const usePods = (): UsePodsResult => {
           setPods((previous) =>
             previous.map((pod) => (pod.id === updated.id ? updated : pod))
           );
+          await loadPodImages(updated.id, { force: true });
         }
 
         if (imageIds.length > 0) {
@@ -300,6 +453,27 @@ const usePods = (): UsePodsResult => {
         );
       }
     },
+    [authHeaders, loadPodImages]
+  );
+
+  const ensureFeedbackForImage = useCallback(
+    async (imageId: string) => {
+      const headers = authHeaders();
+      if (!headers) return;
+
+      try {
+        await fetch(`${API_URL}/podna/feedback`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            generationId: imageId,
+            type: 'like',
+          }),
+        });
+      } catch (err) {
+        console.warn('Failed to sync image feedback for pods', err);
+      }
+    },
     [authHeaders]
   );
 
@@ -308,17 +482,32 @@ const usePods = (): UsePodsResult => {
       const headers = authHeaders();
       if (!headers) return [];
 
-      try {
-        const response = await fetch(`${API_URL}/images/${imageId}/pods`, {
+      const request = () =>
+        fetch(`${API_URL}/images/${imageId}/pods`, {
           method: 'POST',
           headers,
           body: JSON.stringify({ podIds }),
         });
 
-        if (!response.ok) {
-          throw new Error(`Failed to update pods (${response.status})`);
+      const resolveResponse = async (
+        allowRetry: boolean
+      ): Promise<Response> => {
+        const response = await request();
+
+        if (response.ok) {
+          return response;
         }
 
+        if (allowRetry && response.status === 404 && podIds.length > 0) {
+          await ensureFeedbackForImage(imageId);
+          return resolveResponse(false);
+        }
+
+        throw new Error(`Failed to update pods (${response.status})`);
+      };
+
+      try {
+        const response = await resolveResponse(true);
         const json = await response.json();
         const membership: string[] = ensureArray(json?.data?.podIds);
         const updatedPods = ensureArray(json?.data?.updatedPods).map(
@@ -339,6 +528,13 @@ const usePods = (): UsePodsResult => {
 
           return Array.from(map.values());
         });
+
+        await Promise.all(
+          [...updatedPods, ...currentPods]
+            .map((pod) => pod?.id)
+            .filter((podId): podId is string => Boolean(podId))
+            .map((podId) => loadPodImages(podId, { force: true }))
+        );
 
         setLikedImages((previous) =>
           previous.map((image) =>
@@ -361,7 +557,7 @@ const usePods = (): UsePodsResult => {
         return [];
       }
     },
-    [authHeaders]
+    [authHeaders, ensureFeedbackForImage, loadPodImages]
   );
 
   const removeImagesFromPod = useCallback(
@@ -405,6 +601,7 @@ const usePods = (): UsePodsResult => {
               return replacement ?? pod;
             })
           );
+          await loadPodImages(podId, { force: true });
         }
 
         setLikedImages((previous) =>
@@ -423,7 +620,7 @@ const usePods = (): UsePodsResult => {
         );
       }
     },
-    [authHeaders]
+    [authHeaders, loadPodImages]
   );
 
   const unlikeImages = useCallback(
@@ -460,6 +657,7 @@ const usePods = (): UsePodsResult => {
     () => ({
       pods,
       likedImages,
+      podImages,
       loading,
       error,
       hasSeenPodsIntro,
@@ -471,10 +669,13 @@ const usePods = (): UsePodsResult => {
       assignImageToPods,
       removeImagesFromPod,
       unlikeImages,
+      loadPodImages,
+      updatePod,
     }),
     [
       pods,
       likedImages,
+      podImages,
       loading,
       error,
       hasSeenPodsIntro,
@@ -486,6 +687,8 @@ const usePods = (): UsePodsResult => {
       assignImageToPods,
       removeImagesFromPod,
       unlikeImages,
+      loadPodImages,
+      updatePod,
     ]
   );
 };

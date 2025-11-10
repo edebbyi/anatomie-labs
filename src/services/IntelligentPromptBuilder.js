@@ -13,6 +13,63 @@ const db = require('./database');
 const logger = require('../utils/logger');
 const modelGenderService = require('./modelGenderDetectionService');
 
+const STYLE_CLUSTER_CATALOG = [
+  'contemporary',
+  'minimalist',
+  'sporty-chic',
+  'tailored luxury',
+  'urban luxe',
+  'modern romantic',
+  'classic',
+  'bohemian',
+  'avant-garde',
+  'futuristic',
+  'resort-ready',
+  'editorial glam',
+  'streetwear',
+  'luxury athleisure',
+  'elevated basics'
+];
+
+const GARMENT_CANONICALS = {
+  'bomber': { type: 'bomber jacket', defaultMaterial: 'technical nylon' },
+  'bomber jacket': { type: 'bomber jacket', defaultMaterial: 'technical nylon' },
+  'ma-1': { type: 'bomber jacket', defaultMaterial: 'technical nylon' },
+  'flight jacket': { type: 'bomber jacket', defaultMaterial: 'technical nylon' },
+  'puffer': { type: 'puffer jacket', defaultMaterial: 'technical nylon' },
+  'puffer jacket': { type: 'puffer jacket', defaultMaterial: 'technical nylon' },
+  'jacket': { type: 'jacket', defaultMaterial: null },
+  'coat': { type: 'coat', defaultMaterial: null },
+  'blazer': { type: 'blazer', defaultMaterial: 'structured wool' }
+};
+
+const DETAIL_PRIORITY_ORDER = [
+  { category: 'silhouette', weight: 1.3 },
+  { category: 'sleeves', weight: 1.2 },
+  { category: 'closure', weight: 1.2 },
+  { category: 'pockets', weight: 1.1 },
+  { category: 'hardware', weight: 1.1 }
+];
+
+const WARM_RED_NEGATIVE_TERMS = [
+  'red garments',
+  'vivid crimson clothing',
+  'warm burgundy accents',
+  'deep maroon tones',
+  'bright scarlet fabrics',
+  'rust colored garments'
+];
+const DETAIL_KEYWORDS = {
+  silhouette: ['silhouette', 'fit', 'shape', 'oversized', 'cropped', 'boxy', 'tailored', 'relaxed', 'fitted', 'structured'],
+  sleeves: ['sleeve', 'raglan', 'drop-shoulder', 'drop shoulder', 'cuffed sleeve', 'rolled sleeve', 'bishop sleeve'],
+  closure: ['zip', 'zipper', 'two-way zipper', 'double zip', 'snap', 'button', 'lapel', 'notch lapel', 'ribbed collar'],
+  pockets: ['pocket', 'welt', 'flap', 'slant pocket', 'zip pocket', 'zip pockets', 'ribbed hem', 'hem'],
+  hardware: ['hardware', 'stitching', 'tonal stitching', 'matte', 'matte hardware', 'polished', 'metal']
+};
+
+const BOMBER_DETAIL_DEFAULTS = ['ribbed collar', 'ribbed hem', 'zip pockets'];
+const TAILORED_DETAIL_DEFAULTS = ['structured shoulders', 'notch lapel', 'welt pockets'];
+
 class IntelligentPromptBuilder {
   constructor() {
     // Thompson Sampling defaults
@@ -24,7 +81,7 @@ class IntelligentPromptBuilder {
 
     // Weight bounds for tokenization
     this.MIN_WEIGHT = 0.8;
-    this.MAX_WEIGHT = 1.5;
+    this.MAX_WEIGHT = 2.0;
 
     // In-memory cache (LRU with 1000 max entries)
     this.cache = new Map();
@@ -95,7 +152,8 @@ class IntelligentPromptBuilder {
       parsedUserPrompt = null,  // ADDED: Full interpretation from promptEnhancementService
       brandDNA = null,          // ADDED: Can pass brand DNA directly
       enforceBrandDNA = false,  // ADDED: Force brand DNA application
-      brandDNAStrength = 0.7    // ADDED: How strongly to apply brand DNA
+      brandDNAStrength = 0.7,   // ADDED: How strongly to apply brand DNA
+      styleProfile: stylePreferences = null // ADDED: Enhanced style profile preferences
     } = options;
 
     // Generate cache key
@@ -180,34 +238,44 @@ class IntelligentPromptBuilder {
    * Get ultra-detailed descriptors with proper filtering
    */
   async getUltraDetailedDescriptors(userId, filters = {}) {
+    const params = [];
+    let paramIndex = 1;
+
+    // Base query pulls highest confidence descriptors first; 1=1 keeps AND clauses simple
     let query = `
-      SELECT * FROM ultra_detailed_descriptors
-      WHERE user_id = $1
+      SELECT *
+      FROM ultra_detailed_descriptors
+      WHERE 1=1
     `;
 
-    const params = [userId];
-    let paramIndex = 2;
+    if (this.isValidUUID(userId)) {
+      query += ` AND user_id = $${paramIndex}`;
+      params.push(userId);
+      paramIndex++;
+    }
 
-    // Add filters
     if (filters.garmentType) {
-      query += ` AND primary_garment = $${paramIndex}`;
+      query += ` AND (garments->0->>'type') ILIKE '%' || $${paramIndex} || '%'`;
       params.push(filters.garmentType);
       paramIndex++;
     }
 
     if (filters.season) {
-      query += ` AND season = $${paramIndex}`;
+      query += ` AND COALESCE(contextual_attributes->>'season', '') ILIKE '%' || $${paramIndex} || '%'`;
       params.push(filters.season);
       paramIndex++;
     }
 
     if (filters.occasion) {
-      query += ` AND occasion = $${paramIndex}`;
+      query += ` AND COALESCE(contextual_attributes->>'occasion', '') ILIKE '%' || $${paramIndex} || '%'`;
       params.push(filters.occasion);
       paramIndex++;
     }
 
-    query += ` ORDER BY created_at DESC LIMIT 50`;
+    query += ` 
+      ORDER BY overall_confidence DESC NULLS LAST, created_at DESC 
+      LIMIT 50
+    `;
 
     const result = await db.query(query, params);
     return result.rows;
@@ -225,7 +293,9 @@ class IntelligentPromptBuilder {
       brandDNA = null,          // ADDED
       enforceBrandDNA = false,  // ADDED
       brandDNAStrength = 0.7,   // ADDED
-      generationIndex = 0       // ADDED: For model gender alternation
+      generationIndex = 0,      // ADDED: For model gender alternation
+      enablePrecisionTokens = true, // ADDED: Allow callers to disable literal interpretation tokens
+      styleProfile: stylePreferences = null
     } = options;
 
     // NEW: If parsed prompt has specific attributes, prioritize them
@@ -248,6 +318,12 @@ class IntelligentPromptBuilder {
     // Aggregate preferences from descriptors
     const preferences = this.aggregatePreferences(descriptors);
 
+    if (stylePreferences) {
+      this.applyStyleProfilePreferences(preferences, stylePreferences);
+    }
+    const primaryStyleCluster = this.getTopStyleCluster(preferences.styleContext);
+    const styleDistribution = this.buildStyleContextDistribution(preferences.styleContext);
+
     // Sample attributes using Thompson Sampling (with brand DNA bias if enabled)
     const selected = this.thompsonSample(preferences, thompsonParams, creativity, {
       brandDNA,
@@ -258,95 +334,73 @@ class IntelligentPromptBuilder {
       userSpecifiedFabrics
     });
 
+    this.applyGarmentDefaults(selected, parsedUserPrompt, { userSpecifiedFabrics });
+    this.ensureFabricSelection(selected, parsedUserPrompt, brandDNA);
+    const colorContext = this.resolvePrimaryColorContext(parsedUserPrompt, selected);
+
     // Build weighted prompt components in CORRECT ORDER
-    const components = [];
+    const literalDescriptors = this.pickLiteralDescriptors(parsedUserPrompt);
+    const literalDescriptorSet = new Set(
+      literalDescriptors.map(desc => desc.toLowerCase())
+    );
 
     // 1. AESTHETIC THEME (highest priority - sets the tone)
-    if (selected.styleContext) {
-      const aestheticName = String(selected.styleContext).toLowerCase().trim();
-      components.push(this.formatToken(aestheticName, 1.4));
-    } else {
-      components.push(this.formatToken('contemporary', 1.4));
+    const aestheticToken = this.resolveAestheticToken(
+      parsedUserPrompt,
+      selected.styleContext,
+      literalDescriptors,
+      brandDNA,
+      primaryStyleCluster,
+      styleDistribution,
+      stylePreferences
+    );
+    const sections = {
+      style: [],
+      garment: [],
+      model: [],
+      framing: [],
+      lighting: [],
+      quality: []
+    };
+
+    if (aestheticToken?.text) {
+      sections.style.push(this.formatToken(aestheticToken.text, aestheticToken.weight));
     }
 
-    // 2. PRIMARY GARMENT (highest weight)
-    if (selected.garment) {
-      // Build comprehensive garment description
-      const garmentParts = [];
+    const garmentToken = this.buildPrimaryGarmentToken(
+      selected,
+      parsedUserPrompt
+    );
+    if (garmentToken) {
+      sections.garment.push(garmentToken);
+    }
 
-      // Silhouette first (if available)
-      if (selected.garment.silhouette) {
-        garmentParts.push(selected.garment.silhouette);
+    const detailTokens = this.collectDesignDetailTokens(selected, parsedUserPrompt).slice(0, 4);
+    if (detailTokens.length > 0) {
+      sections.garment.push(...detailTokens);
+    }
+
+    if (selected.accessories && selected.accessories.length > 0) {
+      const topAccessory = selected.accessories[0];
+      if (topAccessory) {
+        sections.garment.push(this.formatToken(topAccessory, 1.0));
       }
-
-      // Fit
-      if (selected.garment.fit) {
-        garmentParts.push(selected.garment.fit);
-      }
-
-      // Garment type
-      garmentParts.push(selected.garment.type);
-
-      const garmentDesc = garmentParts.join(', ');
-      components.push(this.formatToken(garmentDesc, 1.3));
-
-      // Add specific construction details
-      if (selected.garment.details && selected.garment.details.length > 0) {
-        for (const detail of selected.garment.details.slice(0, 2)) {
-          components.push(this.formatToken(detail, 1.1));
-        }
-      }
     }
 
-    // 3. FABRIC & MATERIAL (high weight)
-    if (selected.fabric) {
-      const fabricDesc = selected.fabric.finish
-        ? `in ${selected.fabric.material} fabric, with ${selected.fabric.finish} finish`
-        : `in ${selected.fabric.material} fabric`;
-
-      components.push(this.formatToken(fabricDesc, 1.2));
+    if (!this.hasExplicitColor(parsedUserPrompt, selected)) {
+      sections.garment.push(this.formatToken('neutral palette', 1.1));
     }
 
-    // 4. COLORS (very high weight - critical for fashion)
-    if (selected.colors && selected.colors.length > 0) {
-      const colorList = selected.colors.map(c => c.name).join(' and ');
-      components.push(this.formatToken(`${colorList} palette`, 1.3));
-    }
-
-    // 5. MODEL & POSE (NEW - CRITICAL FOR SHOT CONSISTENCY)
-    if (selected.pose) {
-      // Shot type (learned from portfolio)
-      const shotType = selected.pose.shot_type || 'three-quarter length shot';
-      components.push(this.formatToken(shotType, 1.3));
-
-      // Body position - ALWAYS front-facing unless user portfolio shows otherwise
-      const bodyPosition = selected.pose.body_position || 'standing front-facing';
-      components.push(this.formatToken(bodyPosition, 1.2));
-
-      // Pose details
-      if (selected.pose.pose_style) {
-        components.push(this.formatToken(selected.pose.pose_style, 1.1));
-      }
-    } else {
-      // DEFAULT: Always front-facing if no learned pose data
-      components.push(this.formatToken('three-quarter length shot', 1.3));
-      components.push(this.formatToken('model facing camera', 1.3));
-      components.push(this.formatToken('front-facing pose', 1.2));
-    }
-
-    // 5.5 MODEL GENDER (NEW - AUTO-INSERTED BASED ON DESIGNER PREFERENCE)
+    let modelGenderElement = null;
     try {
-      const modelGenderElement = await modelGenderService.getModelGenderPromptElement(
+      modelGenderElement = await modelGenderService.getModelGenderPromptElement(
         userId,
         generationIndex,
-        true  // Track for alternation
+        true
       );
 
-      if (modelGenderElement && modelGenderElement.promptElement) {
-        // High weight for model gender to ensure consistency with designer's portfolio
-        components.push(this.formatToken(modelGenderElement.promptElement, 1.3));
-        
-        logger.info('Added model gender to prompt', {
+      if (modelGenderElement?.promptElement) {
+        logger.info('Evaluated model gender preference for prompt', {
           userId,
           gender: modelGenderElement.gender,
           setting: modelGenderElement.setting,
@@ -354,77 +408,39 @@ class IntelligentPromptBuilder {
         });
       }
     } catch (error) {
-      logger.warn('Failed to add model gender element to prompt', {
+      logger.warn('Failed to evaluate model gender element for prompt', {
         userId,
         error: error.message
       });
-      // Fallback: add default female model
-      components.push(this.formatToken('[stunning female model]', 1.3));
     }
 
-    // 6. ACCESSORIES (if any)
-    if (selected.accessories && selected.accessories.length > 0) {
-      for (const accessory of selected.accessories.slice(0, 2)) {
-        components.push(this.formatToken(accessory, 1.0));
-      }
+    const modelDescriptor = this.resolveModelDescriptor(modelGenderElement);
+    if (modelDescriptor) {
+      sections.model.push(this.formatToken(modelDescriptor, 1.3));
     }
 
-    // 7. LIGHTING (medium-high weight)
-    if (selected.photography && selected.photography.lighting) {
-      const lightingDesc = selected.photography.lighting_direction
-        ? `${selected.photography.lighting} from ${selected.photography.lighting_direction}`
-        : selected.photography.lighting;
+    sections.framing.push(
+      this.formatToken('full-body shot', 1.8),
+      this.formatToken('standing pose', 1.6),
+      this.formatToken('straight-on, facing camera', 1.3)
+    );
 
-      components.push(this.formatToken(lightingDesc, 1.1));
-    } else {
-      components.push(this.formatToken('soft lighting from front', 1.1));
-    }
+    sections.lighting.push(
+      this.formatToken('modern editorial style', 1.1),
+      this.formatToken('neutral background', 1.1),
+      this.formatToken('soft frontal key light', 1.2)
+    );
 
-    // 8. CAMERA SPECS (medium weight) - ADAPTED TO SHOT TYPE
-    if (selected.photography) {
-      // Camera angle - ALWAYS PREFER FRONT ANGLES, adapted to shot type
-      let angle = selected.photography.angle || '3/4 front angle';
+    sections.quality.push(this.formatToken('sharp focus', 1.1));
 
-      // Override side/back angles to front
-      if (angle.includes('side') || angle.includes('back') || angle.includes('profile')) {
-        angle = '3/4 front angle';
-        logger.info('Overriding non-front angle to 3/4 front', { originalAngle: selected.photography.angle });
-      }
-
-      // ADAPT: If full-body shot, prefer full-body front view
-      if (selected.pose?.shot_type?.includes('full-body')) {
-        angle = 'full-body front view';
-      }
-
-      components.push(this.formatToken(angle, 1.2));
-
-      // Camera height
-      const height = selected.photography.height || 'eye level';
-      components.push(this.formatToken(`at ${height}`, 1.0));
-
-      // Background
-      if (selected.photography.background) {
-        components.push(this.formatToken(`${selected.photography.background} background`, 1.0));
-      } else {
-        components.push(this.formatToken('clean studio background', 1.0));
-      }
-    } else {
-      // DEFAULT camera settings - ALWAYS FRONT-FACING, WITH SHOT TYPE VARIETY
-      const defaultAngle = selected.pose?.shot_type?.includes('full-body')
-        ? 'full-body front view'
-        : '3/4 front angle';
-      
-      components.push(this.formatToken(defaultAngle, 1.2));
-      components.push(this.formatToken('at eye level', 1.0));
-      components.push(this.formatToken('clean studio background', 1.0));
-    }
-
-    // 9. STYLE DESCRIPTOR (if from contextual analysis)
-    if (selected.styleDescriptor) {
-      components.push(this.formatToken(selected.styleDescriptor, 1.0));
-    } else {
-      components.push(this.formatToken('modern editorial style', 1.0));
-    }
+    const components = [
+      ...sections.style,
+      ...sections.garment,
+      ...sections.model,
+      ...sections.framing,
+      ...sections.lighting,
+      ...sections.quality
+    ];
 
     // ========== NEW: APPLY USER MODIFIERS WITH WEIGHTING ==========
     // If user gave specific command (high specificity), weight their terms more heavily
@@ -434,7 +450,12 @@ class IntelligentPromptBuilder {
     if (userModifiers.length > 0) {
       // Remove any empty or duplicate modifiers
       const cleanedModifiers = [...new Set(
-        userModifiers.filter(m => m && m.trim().length > 0)
+        userModifiers
+          .filter(m => m && m.trim().length > 0)
+          .filter(m => {
+            if (literalDescriptorSet.size === 0) return true;
+            return !literalDescriptorSet.has(m.toLowerCase());
+          })
       )];
 
       if (respectUserIntent) {
@@ -465,6 +486,8 @@ class IntelligentPromptBuilder {
 
     // ========== NEW: ADD VARIATION INSTRUCTIONS ==========
     // Guide the AI on how creative vs literal to be
+    const hasLiteralIntent = respectUserIntent || (parsedUserPrompt?.userModifiers?.length > 0);
+
     if (creativity >= 1.0) {
       components.push(this.formatToken('explore creative variations', 0.9));
       components.push(this.formatToken('interpret broadly', 0.8));
@@ -476,7 +499,7 @@ class IntelligentPromptBuilder {
       components.push(this.formatToken('some creative freedom', 0.8));
       logger.debug('Added medium variation instructions');
 
-    } else if (creativity <= 0.5) {
+    } else if (creativity <= 0.5 && !hasLiteralIntent && enablePrecisionTokens) {
       components.push(this.formatToken('precise execution', 1.2));
       components.push(this.formatToken('literal interpretation', 1.1));
       components.push(this.formatToken('exact specifications', 1.0));
@@ -485,17 +508,14 @@ class IntelligentPromptBuilder {
     // ====================================================
 
     // 10. QUALITY MARKERS (standard weight) - ALWAYS AT END
-    components.push(this.formatToken('professional fashion photography', 1.3));
-    components.push(this.formatToken('high detail', 1.2));
-    components.push(this.formatToken('8k', 1.1));
-    components.push(this.formatToken('sharp focus', 1.0));
-    components.push(this.formatToken('studio quality', 1.0));
+    this.enforcePromptRules(components, { parsedUserPrompt, selected, colorContext });
+    this.dedupeTokens(components);
 
     // Join all components
     const positivePrompt = components.join(', ');
 
     // Build negative prompt (user preferences + defaults)
-    const negativePrompt = this.buildNegativePrompt(selected);
+    const negativePrompt = this.buildNegativePrompt(selected, { colorContext, parsedUserPrompt });
 
     // Build metadata for tracking
     const metadata = {
@@ -510,8 +530,12 @@ class IntelligentPromptBuilder {
       pose_enforced_front_facing: !selected.pose || selected.pose.body_position?.includes('front'),
       user_modifiers: userModifiers,              // ADD THIS
       respect_user_intent: respectUserIntent,     // ADD THIS
-      model_gender_applied: true,                 // ADD THIS: Track that model gender was applied
-      generation_index: generationIndex            // ADD THIS: For batch tracking
+      model_gender_applied: !!modelGenderElement, // ADD THIS: Track that model gender was applied
+      model_gender_token: modelGenderElement?.promptElement || null,
+      generation_index: generationIndex,           // ADD THIS: For batch tracking
+      aesthetic_cluster: aestheticToken?.text || 'contemporary style',
+      primary_color: colorContext?.color || null,
+      color_source: colorContext?.source || null
     };
 
     return {
@@ -676,6 +700,128 @@ class IntelligentPromptBuilder {
     }
 
     return preferences;
+  }
+
+  applyStyleProfilePreferences(preferences = {}, stylePreferences = {}) {
+    if (!preferences || !stylePreferences) {
+      return;
+    }
+
+    // Ensure expected maps exist even if descriptors array was empty
+    preferences.garments = preferences.garments || {};
+    preferences.fabrics = preferences.fabrics || {};
+    preferences.colors = preferences.colors || {};
+    preferences.construction = preferences.construction || {};
+    preferences.photography = preferences.photography || {};
+    preferences.styleContext = preferences.styleContext || {};
+
+    const primarySilhouette = Array.isArray(stylePreferences.silhouettePreferences)
+      && stylePreferences.silhouettePreferences.length > 0
+      ? this.normalizeCandidateValue(stylePreferences.silhouettePreferences[0].name)
+      : null;
+
+    const bumpCount = (collection, key, data, weight = 1) => {
+      if (!collection || !key) return;
+      if (!collection[key]) {
+        collection[key] = {
+          count: 0,
+          data: data !== undefined ? data : null
+        };
+      }
+      if (collection[key].data == null && data !== undefined) {
+        collection[key].data = data;
+      }
+      const normalizedWeight = this.normalizeWeight(weight, 1);
+      collection[key].count += normalizedWeight;
+    };
+
+    if (Array.isArray(stylePreferences.aestheticThemes)) {
+      stylePreferences.aestheticThemes.forEach(theme => {
+        const name = this.normalizeCandidateValue(theme?.name);
+        if (!name) return;
+        const key = name.toLowerCase();
+        bumpCount(preferences.styleContext, key, name, theme?.weight ?? theme?.strength ?? theme?.count ?? 1);
+      });
+    }
+
+    if (stylePreferences.primaryAesthetic) {
+      const primary = this.normalizeCandidateValue(stylePreferences.primaryAesthetic);
+      if (primary) {
+        bumpCount(preferences.styleContext, primary.toLowerCase(), primary, 1.5);
+      }
+    }
+
+    if (Array.isArray(stylePreferences.colors)) {
+      stylePreferences.colors.forEach(color => {
+        const name = this.normalizeCandidateValue(color?.name);
+        if (!name) return;
+        const key = name.toLowerCase();
+        const data = {
+          name,
+          source: color?.source || 'style-profile',
+          hex: color?.hex || this.getColorHex(name)
+        };
+        bumpCount(preferences.colors, key, data, color?.weight);
+      });
+    }
+
+    if (Array.isArray(stylePreferences.fabrics)) {
+      stylePreferences.fabrics.forEach(fabric => {
+        const material = this.normalizeCandidateValue(fabric?.name || fabric?.material);
+        if (!material) return;
+        const key = material.toLowerCase();
+        const data = {
+          material,
+          finish: fabric?.finish || fabric?.properties?.texture || null
+        };
+        bumpCount(preferences.fabrics, key, data, fabric?.weight);
+      });
+    }
+
+    if (Array.isArray(stylePreferences.constructionDetails)) {
+      stylePreferences.constructionDetails.forEach(detail => {
+        const descriptor = this.normalizeCandidateValue(detail?.name || detail?.detail || detail);
+        if (!descriptor) return;
+        const key = descriptor.toLowerCase();
+        bumpCount(preferences.construction, key, descriptor, detail?.weight);
+      });
+    }
+
+    if (Array.isArray(stylePreferences.garmentTypes)) {
+      stylePreferences.garmentTypes.forEach(garment => {
+        const type = this.normalizeCandidateValue(garment?.type || garment);
+        if (!type) return;
+        const key = type.toLowerCase();
+        const data = {
+          type,
+          silhouette: garment?.silhouette || primarySilhouette,
+          details: Array.isArray(garment?.details) ? garment.details : [],
+          source: garment?.source || 'style-profile'
+        };
+        bumpCount(preferences.garments, key, data, garment?.weight);
+      });
+    }
+
+    if (Array.isArray(stylePreferences.signaturePieces)) {
+      stylePreferences.signaturePieces.forEach(piece => {
+        const garmentType = this.normalizeCandidateValue(piece?.garmentType);
+        if (garmentType) {
+          const key = garmentType.toLowerCase();
+          const data = {
+            type: garmentType,
+            silhouette: primarySilhouette,
+            details: piece?.standoutDetail ? [piece.standoutDetail] : [],
+            source: 'signature-piece'
+          };
+          bumpCount(preferences.garments, key, data, 0.8);
+        }
+
+        const standout = this.normalizeCandidateValue(piece?.standoutDetail);
+        if (standout) {
+          bumpCount(preferences.construction, standout.toLowerCase(), standout, 0.6);
+        }
+      });
+    }
   }
 
   /**
@@ -919,6 +1065,782 @@ class IntelligentPromptBuilder {
     return bestKey ? preferenceDict[bestKey].data : null;
   }
 
+  resolveAestheticToken(
+    parsedUserPrompt,
+    selectedContext,
+    literalDescriptors = [],
+    brandDNA = null,
+    primaryStyleCluster = null,
+    styleDistribution = [],
+    stylePreferences = null
+  ) {
+    const candidateQueue = [];
+
+    if (parsedUserPrompt) {
+      if (Array.isArray(parsedUserPrompt.styleModifiers)) {
+        candidateQueue.push(...parsedUserPrompt.styleModifiers);
+      }
+      if (Array.isArray(parsedUserPrompt.styleAdjectives)) {
+        candidateQueue.push(...parsedUserPrompt.styleAdjectives);
+      }
+      if (Array.isArray(parsedUserPrompt.userModifiers)) {
+        candidateQueue.push(...parsedUserPrompt.userModifiers);
+      }
+    }
+
+    if (Array.isArray(literalDescriptors)) {
+      candidateQueue.push(...literalDescriptors);
+    }
+
+    candidateQueue.push(selectedContext, primaryStyleCluster);
+
+    if (stylePreferences) {
+      if (stylePreferences.primaryAesthetic) {
+        candidateQueue.push(stylePreferences.primaryAesthetic);
+      }
+
+      if (Array.isArray(stylePreferences.secondaryAesthetics)) {
+        candidateQueue.push(...stylePreferences.secondaryAesthetics);
+      }
+
+      if (Array.isArray(stylePreferences.aestheticThemes)) {
+        stylePreferences.aestheticThemes.forEach(theme => {
+          if (theme?.name) {
+            candidateQueue.push(theme.name);
+          }
+        });
+      }
+    }
+
+    if (brandDNA) {
+      if (Array.isArray(brandDNA.secondaryAesthetics)) {
+        candidateQueue.push(...brandDNA.secondaryAesthetics);
+      }
+      if (brandDNA.primaryAesthetic) {
+        candidateQueue.push(brandDNA.primaryAesthetic);
+      }
+    }
+
+    for (const candidate of candidateQueue) {
+      const match = this.matchAestheticCluster(candidate);
+      if (match) {
+        return {
+          text: this.buildClusterTokenText(match),
+          weight: 1.2
+        };
+      }
+    }
+
+    if (Array.isArray(styleDistribution) && styleDistribution.length > 0) {
+      const sampled = this.sampleClusterFromDistribution(styleDistribution);
+      if (sampled) {
+        return {
+          text: this.buildClusterTokenText(sampled),
+          weight: 1.2
+        };
+      }
+    }
+
+    return {
+      text: this.buildClusterTokenText('contemporary'),
+      weight: 1.2
+    };
+  }
+
+  buildGarmentDescription(garment, parsedUserPrompt, literalDescriptors = []) {
+    if (!garment) return '';
+
+    const descriptorParts = [];
+
+    if (literalDescriptors.length > 0) {
+      descriptorParts.push(literalDescriptors.slice(0, 2).join(' '));
+    } else if (parsedUserPrompt?.styleModifiers?.length) {
+      descriptorParts.push(parsedUserPrompt.styleModifiers.join(' '));
+    } else if (parsedUserPrompt?.styleAdjectives?.length) {
+      descriptorParts.push(parsedUserPrompt.styleAdjectives[0]);
+    }
+
+    if (garment.silhouette) {
+      descriptorParts.push(garment.silhouette);
+    }
+
+    if (garment.fit) {
+      descriptorParts.push(garment.fit);
+    }
+
+    if (garment.type) {
+      descriptorParts.push(garment.type);
+    }
+
+    return descriptorParts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  matchAestheticCluster(candidate) {
+    const normalized = this.normalizeCandidateValue(candidate);
+    if (!normalized) return null;
+    const lower = normalized.toLowerCase();
+
+    for (const cluster of STYLE_CLUSTER_CATALOG) {
+      const clusterLower = cluster.toLowerCase();
+      const clusterSpaced = clusterLower.replace(/-/g, ' ');
+      if (lower.includes(clusterLower) || lower.includes(clusterSpaced)) {
+        return clusterLower;
+      }
+    }
+
+    return null;
+  }
+
+  buildClusterTokenText(cluster) {
+    if (!cluster) return 'contemporary style';
+    const normalized = cluster.toLowerCase();
+    const suffix =
+      normalized.includes('chic') ||
+      normalized.includes('glam') ||
+      normalized.includes('luxe') ||
+      normalized.includes('streetwear')
+        ? 'aesthetic'
+        : 'style';
+    return `${normalized} ${suffix}`;
+  }
+
+  sampleClusterFromDistribution(distribution) {
+    if (!Array.isArray(distribution) || distribution.length === 0) return null;
+    const total = distribution.reduce((sum, entry) => sum + (entry.weight || 0), 0);
+    if (total <= 0) return distribution[0].cluster;
+    const threshold = Math.random() * total;
+    let cumulative = 0;
+    for (const entry of distribution) {
+      cumulative += entry.weight || 0;
+      if (threshold <= cumulative) {
+        return entry.cluster;
+      }
+    }
+    return distribution[0].cluster;
+  }
+
+  enforcePromptRules(components, context = {}) {
+    const conflictKeywords = [
+      '3/4',
+      'three-quarter angle',
+      'three-quarter length',
+      'front angle',
+      'quarter view',
+      'profile',
+      'over-shoulder',
+      'direct eye contact',
+      'head centered',
+      'close-up',
+      'portrait',
+      'bust',
+      'headshot',
+      'upper body',
+      'half body',
+      'waist-up',
+      'knee-up',
+      'medium shot',
+      'tight crop',
+      'cropped frame',
+      'crop',
+      'zoom'
+    ];
+    this.removeTokensContaining(components, conflictKeywords);
+
+    this.limitDetailTokens(components, [
+      { text: 'sharp focus', weight: 1.1 }
+    ]);
+    this.removeTokensContaining(components, [
+      'studio quality',
+      'precise execution',
+      'literal interpretation',
+      'exact specifications',
+      'creative freedom',
+      'interpret broadly',
+      'diverse interpretations',
+      'some creative freedom',
+      'explore creative variations',
+      'balanced interpretation'
+    ]);
+  }
+
+  removeTokensContaining(components, keywords = []) {
+    if (!Array.isArray(keywords) || keywords.length === 0) return 0;
+    const lowered = keywords
+      .filter(Boolean)
+      .map(keyword => keyword.toLowerCase());
+
+    let removed = 0;
+    for (let i = components.length - 1; i >= 0; i--) {
+      const tokenLower = String(components[i]).toLowerCase();
+      if (lowered.some(keyword => tokenLower.includes(keyword))) {
+        components.splice(i, 1);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  upsertToken(components, text, weight, matchPredicate = null) {
+    if (!text) return;
+    const normalizedMatcher = matchPredicate
+      ? matchPredicate
+      : (tokenLower) => tokenLower.includes(text.toLowerCase());
+
+    for (let i = components.length - 1; i >= 0; i--) {
+      const tokenLower = String(components[i]).toLowerCase();
+      if (normalizedMatcher(tokenLower)) {
+        components.splice(i, 1);
+      }
+    }
+
+    components.push(this.formatToken(text, weight));
+  }
+
+  limitDetailTokens(components, allowed = []) {
+    const removalKeywords = ['high detail', 'sharp focus', '8k', 'studio quality'];
+    let insertIndex = components.length;
+
+    for (let i = components.length - 1; i >= 0; i--) {
+      const tokenLower = String(components[i]).toLowerCase();
+      if (removalKeywords.some(keyword => tokenLower.includes(keyword))) {
+        insertIndex = Math.min(insertIndex, i);
+        components.splice(i, 1);
+      }
+    }
+
+    if (!Array.isArray(allowed) || allowed.length === 0) return;
+    if (insertIndex === components.length) {
+      insertIndex = components.length;
+    }
+
+    allowed.forEach((token, offset) => {
+      if (token?.text) {
+        components.splice(
+          insertIndex + offset,
+          0,
+          this.formatToken(token.text, token.weight || 1.0)
+        );
+      }
+    });
+  }
+
+  removeTokensByPredicate(components, predicate) {
+    if (typeof predicate !== 'function') return;
+    for (let i = components.length - 1; i >= 0; i--) {
+      const tokenLower = String(components[i]).toLowerCase();
+      if (predicate(tokenLower)) {
+        components.splice(i, 1);
+      }
+    }
+  }
+
+  pickFirstValue(...sources) {
+    for (const source of sources) {
+      if (Array.isArray(source)) {
+        for (const value of source) {
+          const normalized = this.normalizeCandidateValue(value);
+          if (normalized) {
+            return normalized;
+          }
+        }
+      } else {
+        const normalized = this.normalizeCandidateValue(source);
+        if (normalized) {
+          return normalized;
+        }
+      }
+    }
+    return null;
+  }
+
+  normalizeCandidateValue(value) {
+    if (value === null || value === undefined) return null;
+    const normalized = String(value).trim();
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  sanitizeGarmentTypeDescriptor(rawType) {
+    const normalized = this.normalizeCandidateValue(rawType);
+    if (!normalized) return null;
+
+    let descriptor = normalized;
+
+    // Remove redundant "-style" qualifiers that duplicate the base garment term
+    descriptor = descriptor.replace(/\b([a-z0-9]+)-style\b/gi, '$1');
+    descriptor = descriptor.replace(/\b([a-z0-9]+)\s+style\s+\1\b/gi, '$1');
+
+    descriptor = descriptor.replace(/\s+/g, ' ').trim();
+    if (!descriptor) return null;
+
+    // Collapse immediate duplicate words (e.g. "bomber bomber jacket" → "bomber jacket")
+    descriptor = descriptor.replace(/\b(\w+)(\s+\1)+\b/gi, '$1');
+
+    return descriptor.trim();
+  }
+
+  normalizeWeight(value, fallback = 1) {
+    let numeric = null;
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      numeric = value;
+    } else if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed.length > 0) {
+        const isPercent = trimmed.endsWith('%');
+        const cleaned = isPercent ? trimmed.slice(0, -1) : trimmed;
+        const parsed = parseFloat(cleaned);
+        if (!Number.isNaN(parsed)) {
+          numeric = isPercent ? parsed / 100 : parsed;
+        }
+      }
+    } else if (value !== null && value !== undefined) {
+      const maybeNumber = Number(value);
+      if (!Number.isNaN(maybeNumber)) {
+        numeric = maybeNumber;
+      }
+    }
+
+    if (numeric === null || !Number.isFinite(numeric) || numeric <= 0) {
+      numeric = fallback;
+    }
+
+    return Math.max(numeric, 0.1);
+  }
+
+  ensureFabricSelection(selected, parsedUserPrompt, brandDNA) {
+    if (selected.fabric) return;
+
+    if (parsedUserPrompt?.fabrics?.length) {
+      selected.fabric = { material: parsedUserPrompt.fabrics[0] };
+      return;
+    }
+
+    const brandFabrics = Array.isArray(brandDNA?.signatureFabrics)
+      ? brandDNA.signatureFabrics
+      : [];
+
+    if (brandFabrics.length > 0) {
+      const fabric = brandFabrics[0];
+      selected.fabric = {
+        material: fabric.name || fabric.type || fabric,
+        finish: fabric.finish || fabric.texture || null
+      };
+      return;
+    }
+
+    selected.fabric = { material: 'wool' };
+  }
+
+  applyGarmentDefaults(selected, parsedUserPrompt, options = {}) {
+    if (!selected?.garment) return;
+
+    const { userSpecifiedFabrics = [] } = options;
+    const desiredType = this.pickFirstValue(
+      parsedUserPrompt?.garmentType,
+      selected.garment.type
+    );
+
+    const canonical = this.canonicalizeGarmentType(desiredType);
+    if (canonical?.type) {
+      selected.garment.type = canonical.type;
+    }
+
+    // Preserve user fabric overrides
+    const hasUserFabric = Array.isArray(userSpecifiedFabrics) && userSpecifiedFabrics.length > 0;
+    if (hasUserFabric) {
+      selected.fabric = { material: userSpecifiedFabrics[0] };
+      return;
+    }
+
+    if (!selected.fabric && canonical?.defaultMaterial) {
+      selected.fabric = { material: canonical.defaultMaterial };
+    }
+
+    if (selected.fabric && canonical?.type === 'bomber jacket') {
+      const material = (selected.fabric.material || '').toLowerCase();
+      if (material.includes('wool') || material.includes('tweed')) {
+        selected.fabric = { material: canonical.defaultMaterial };
+      }
+    }
+  }
+
+  canonicalizeGarmentType(rawType) {
+    const sanitized = this.sanitizeGarmentTypeDescriptor(rawType);
+    if (!sanitized) return { type: null, defaultMaterial: null };
+
+    const key = sanitized.toLowerCase();
+    if (GARMENT_CANONICALS[key]) {
+      return { ...GARMENT_CANONICALS[key] };
+    }
+
+    return { type: sanitized, defaultMaterial: null };
+  }
+
+  buildPrimaryGarmentToken(selected, parsedUserPrompt) {
+    const garmentCandidate = this.pickFirstValue(
+      parsedUserPrompt?.garmentType,
+      selected?.garment?.type
+    );
+
+    const canonical = this.canonicalizeGarmentType(garmentCandidate);
+    const garmentType = canonical.type;
+    if (!garmentType) return null;
+
+    const fabric = this.pickFirstValue(
+      parsedUserPrompt?.fabrics,
+      selected?.fabric?.material,
+      canonical.defaultMaterial
+    );
+
+    const parts = [];
+    if (fabric) parts.push(String(fabric).toLowerCase());
+    parts.push(String(garmentType).toLowerCase());
+
+    const descriptor = parts
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!descriptor) return null;
+
+    return this.formatToken(descriptor, 1.3);
+  }
+
+  resolveModelDescriptor(modelGenderElement) {
+    const inferredGender = this.inferGenderFromModelElement(modelGenderElement);
+    return this.buildDefaultModelDescriptor(inferredGender);
+  }
+
+  inferGenderFromModelElement(modelGenderElement) {
+    const normalizedGender = this.normalizeCandidateValue(modelGenderElement?.gender);
+    if (normalizedGender) {
+      return normalizedGender.toLowerCase();
+    }
+
+    const promptDescriptor = this.normalizeCandidateValue(modelGenderElement?.promptElement);
+    if (!promptDescriptor) return null;
+
+    const lower = promptDescriptor.toLowerCase();
+    if (lower.includes('male')) return 'male';
+    if (lower.includes('female')) return 'female';
+    if (lower.includes('androgynous') || lower.includes('neutral')) return 'neutral';
+    if (lower.includes('models')) return 'both';
+    return null;
+  }
+
+  buildDefaultModelDescriptor(gender) {
+    if (!gender) {
+      return 'beautiful female model facing camera';
+    }
+
+    if (gender.includes('male')) {
+      return 'handsome male model facing camera';
+    }
+
+    if (gender.includes('neutral') || gender.includes('androgynous')) {
+      return 'androgynous model facing camera';
+    }
+
+    if (gender.includes('both')) {
+      return 'beautiful models facing camera';
+    }
+
+    return 'beautiful female model facing camera';
+  }
+
+  resolvePrimaryColorContext(parsedUserPrompt, selected) {
+    const userColor = this.pickFirstValue(parsedUserPrompt?.colors);
+    if (userColor) {
+      const normalized = this.normalizeCandidateValue(userColor);
+      return {
+        color: normalized,
+        normalized: normalized ? normalized.toLowerCase() : null,
+        source: 'user'
+      };
+    }
+
+    return { color: null, normalized: null, source: null };
+  }
+
+  buildStyleContextDistribution(styleContextPrefs = {}) {
+    const distribution = [];
+    for (const [key, value] of Object.entries(styleContextPrefs || {})) {
+      if (!value?.count) continue;
+      const match = this.matchAestheticCluster(key);
+      if (match) {
+        distribution.push({ cluster: match, weight: value.count });
+      }
+    }
+    return distribution.sort((a, b) => b.weight - a.weight);
+  }
+
+  getTopStyleCluster(styleContextPrefs = {}) {
+    const distribution = this.buildStyleContextDistribution(styleContextPrefs);
+    return distribution.length > 0 ? distribution[0].cluster : null;
+  }
+
+  collectDesignDetailTokens(selected, parsedUserPrompt) {
+    const buckets = new Map();
+    DETAIL_PRIORITY_ORDER.forEach(({ category }) => buckets.set(category, []));
+
+    const pushDetail = (category, phrase) => {
+      if (!category || !phrase) return;
+      const normalized = this.normalizeDetailByCategory(phrase, category);
+      if (!normalized) return;
+      const list = buckets.get(category);
+      if (!list.includes(normalized)) {
+        list.push(normalized);
+      }
+    };
+
+    if (parsedUserPrompt?.silhouette) {
+      pushDetail('silhouette', parsedUserPrompt.silhouette);
+    }
+
+    (parsedUserPrompt?.constructionDetails || []).forEach(detail => {
+      const categorized = this.categorizeDetailCandidate(detail);
+      if (categorized) {
+        pushDetail(categorized.category, categorized.phrase);
+      }
+    });
+
+    if (Array.isArray(selected?.garment?.details)) {
+      selected.garment.details.forEach(detail => {
+        const categorized = this.categorizeDetailCandidate(detail);
+        if (categorized) {
+          pushDetail(categorized.category, categorized.phrase);
+        }
+      });
+    }
+
+    const constructionDetails = Array.isArray(selected?.construction)
+      ? selected.construction
+      : selected?.construction
+        ? [selected.construction]
+        : [];
+
+    constructionDetails.forEach(detail => {
+      const categorized = this.categorizeDetailCandidate(detail);
+      if (categorized) {
+        pushDetail(categorized.category, categorized.phrase);
+      }
+    });
+
+    const garmentType = selected?.garment?.type?.toLowerCase() || '';
+    if (garmentType === 'bomber jacket') {
+      BOMBER_DETAIL_DEFAULTS.forEach(detail => {
+        const lower = detail.toLowerCase();
+        const category = lower.includes('collar')
+          ? 'closure'
+          : (lower.includes('pocket') ? 'pockets'
+            : (lower.includes('hem') ? 'pockets' : 'hardware'));
+        pushDetail(category, detail);
+      });
+    } else if (['blazer', 'coat', 'jacket'].some(type => garmentType.includes(type))) {
+      TAILORED_DETAIL_DEFAULTS.forEach(detail => pushDetail(
+        detail.includes('lapel') ? 'closure' : detail.includes('pocket') ? 'pockets' : 'silhouette',
+        detail
+      ));
+    }
+
+    const tokens = [];
+    const added = new Set();
+
+    for (const { category, weight } of DETAIL_PRIORITY_ORDER) {
+      const list = buckets.get(category) || [];
+      if (list.length === 0) continue;
+      for (const phrase of list) {
+        if (tokens.length >= 3) break;
+        if (added.has(phrase)) continue;
+        tokens.push(this.formatToken(phrase, weight));
+        added.add(phrase);
+        break;
+      }
+    }
+
+    if (tokens.length < 3) {
+      for (const { category, weight } of DETAIL_PRIORITY_ORDER) {
+        if (tokens.length >= 3) break;
+        const list = buckets.get(category) || [];
+        for (const phrase of list) {
+          if (added.has(phrase)) continue;
+          tokens.push(this.formatToken(phrase, weight));
+          added.add(phrase);
+          if (tokens.length >= 3) break;
+        }
+      }
+    }
+
+    if (tokens.length < 3) {
+      const fallbackDetails = this.getFallbackDetails(garmentType);
+      fallbackDetails.forEach(({ text, weight }) => {
+        if (tokens.length >= 3) return;
+        if (added.has(text)) return;
+        tokens.push(this.formatToken(text, weight));
+        added.add(text);
+      });
+    }
+
+    return tokens;
+  }
+
+  categorizeDetailCandidate(detail) {
+    const normalized = this.normalizeDetailCandidate(detail);
+    if (!normalized) return null;
+
+    const lower = normalized.toLowerCase();
+
+    for (const [category, keywords] of Object.entries(DETAIL_KEYWORDS)) {
+      if (keywords.some(keyword => lower.includes(keyword))) {
+        return {
+          category,
+          phrase: normalized
+        };
+      }
+    }
+
+    return null;
+  }
+
+  normalizeDetailCandidate(detail) {
+    if (!detail) return null;
+    if (typeof detail === 'string') {
+      return detail.trim();
+    }
+    if (Array.isArray(detail)) {
+      return detail.filter(Boolean).join(' ').trim();
+    }
+    if (typeof detail === 'object') {
+      if (detail.description) return String(detail.description).trim();
+      if (detail.name) return String(detail.name).trim();
+      if (detail.detail) return String(detail.detail).trim();
+    }
+    return null;
+  }
+
+  normalizeDetailByCategory(phrase, category) {
+    if (!phrase) return null;
+    const trimmed = phrase.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!trimmed) return null;
+
+    if (category === 'silhouette') {
+      if (trimmed.includes('silhouette')) {
+        return trimmed.replace(' silhouette silhouette', ' silhouette');
+      }
+      const keyword = DETAIL_KEYWORDS.silhouette.find(key => trimmed.includes(key));
+      if (keyword) {
+        return `${keyword} silhouette`.replace(/\s+/g, ' ');
+      }
+      return `${trimmed} silhouette`;
+    }
+
+    if (category === 'sleeves') {
+      if (trimmed.includes('sleeve')) {
+        return trimmed.replace('sleeves', 'sleeves').replace('sleeve', 'sleeves');
+      }
+      return `${trimmed} sleeves`;
+    }
+
+    if (category === 'pockets' && !trimmed.includes('pocket') && !trimmed.includes('hem')) {
+      return `${trimmed} pockets`;
+    }
+
+    return trimmed;
+  }
+
+  getFallbackDetails(garmentType = '') {
+    const lower = garmentType?.toLowerCase() || '';
+    if (lower.includes('bomber')) {
+      return [
+        { text: 'oversized silhouette', weight: 1.3 },
+        { text: 'cuffed sleeves', weight: 1.2 },
+        { text: 'two-way zipper', weight: 1.2 }
+      ];
+    }
+
+    if (lower.includes('blazer') || lower.includes('coat') || lower.includes('jacket')) {
+      return [
+        { text: 'tailored silhouette', weight: 1.3 },
+        { text: 'structured shoulders', weight: 1.2 },
+        { text: 'tonal stitching', weight: 1.1 }
+      ];
+    }
+
+    return [
+      { text: 'refined silhouette', weight: 1.3 },
+      { text: 'cuffed sleeves', weight: 1.2 },
+      { text: 'tonal stitching', weight: 1.1 }
+    ];
+  }
+
+  dedupeTokens(components) {
+    if (!Array.isArray(components)) return;
+    const seen = new Set();
+    for (let i = 0; i < components.length; i++) {
+      const token = components[i];
+      if (!token) continue;
+      const normalized = String(token).toLowerCase();
+      if (seen.has(normalized)) {
+        components.splice(i, 1);
+        i--;
+        continue;
+      }
+      seen.add(normalized);
+    }
+  }
+
+  dedupeAndJoinTokens(tokens = []) {
+    const copy = Array.isArray(tokens) ? [...tokens] : [];
+    this.dedupeTokens(copy);
+    return copy.join(', ');
+  }
+
+  pickLiteralDescriptors(parsedUserPrompt) {
+    if (!parsedUserPrompt) return [];
+
+    const {
+      styleModifiers = [],
+      styleAdjectives = [],
+      userModifiers = [],
+      colors = [],
+      fabrics = [],
+      occasions = [],
+      garmentType
+    } = parsedUserPrompt;
+
+    const exclusionSet = new Set(
+      [
+        ...(Array.isArray(colors) ? colors : []),
+        ...(Array.isArray(fabrics) ? fabrics : []),
+        ...(Array.isArray(occasions) ? occasions : []),
+        garmentType
+      ]
+        .filter(Boolean)
+        .map(val => String(val).toLowerCase())
+    );
+
+    const prioritizedDescriptors = [
+      ...styleModifiers,
+      ...styleAdjectives,
+      ...userModifiers
+    ];
+
+    const literalDescriptors = [];
+    for (const descriptor of prioritizedDescriptors) {
+      if (!descriptor) continue;
+      const normalized = String(descriptor).toLowerCase().trim();
+      if (!normalized) continue;
+      if (exclusionSet.has(normalized)) continue;
+      if (literalDescriptors.some(existing => existing.toLowerCase() === normalized)) continue;
+      // Skip camera/lighting keywords that may slip into modifiers
+      if (normalized.includes('lighting') || normalized.includes('background')) continue;
+      literalDescriptors.push(descriptor);
+    }
+
+    return literalDescriptors;
+  }
+
   /**
    * Sample multiple items from a category
    */
@@ -1046,13 +1968,20 @@ class IntelligentPromptBuilder {
   /**
    * Build negative prompt
    */
-  buildNegativePrompt(selected) {
-    const negative = [this.buildDefaultNegativePrompt()];
+  buildNegativePrompt(selected, context = {}) {
+    const negative = [
+      this.buildDefaultNegativePrompt(),
+      this.buildFrontAngleNegativePrompt()
+    ];
+
+    if (this.shouldApplyWarmRedNegatives(context)) {
+      negative.push(this.buildWarmRedNegativePrompt());
+    }
 
     // Add user-specific negatives based on preferences
     // (can be extended based on what user dislikes)
 
-    return negative.join(', ');
+    return negative.filter(Boolean).join(', ');
   }
 
   /**
@@ -1068,46 +1997,112 @@ class IntelligentPromptBuilder {
     return terms.map(t => this.formatToken(t, NEGATIVE_WEIGHT)).join(', ');
   }
 
+  buildFrontAngleNegativePrompt() {
+    const NEGATIVE_WEIGHT = 1.5;
+    const composite = 'close-up, portrait, headshot, bust, upper body, waist-up, knee-up, tight crop, cropped frame, extreme close-up, macro face, profile view, 3/4 view, quarter view, over-shoulder, gaze averted, looking away';
+    return this.formatToken(composite, NEGATIVE_WEIGHT);
+  }
+
+  buildWarmRedNegativePrompt() {
+    const NEGATIVE_WEIGHT = 1.6;
+    return WARM_RED_NEGATIVE_TERMS
+      .map(term => this.formatToken(term, NEGATIVE_WEIGHT))
+      .join(', ');
+  }
+
+  shouldApplyWarmRedNegatives(context = {}) {
+    const { parsedUserPrompt = null } = context;
+    if (!parsedUserPrompt) return true;
+
+    const userColors = Array.isArray(parsedUserPrompt.colors)
+      ? parsedUserPrompt.colors
+      : [];
+    const modifiers = Array.isArray(parsedUserPrompt.userModifiers)
+      ? parsedUserPrompt.userModifiers
+      : [];
+
+    return ![...userColors, ...modifiers].some(color => this.referencesWarmRed(color));
+  }
+
+  referencesWarmRed(candidate) {
+    if (!candidate) return false;
+    const normalized = String(candidate).toLowerCase();
+    return ['red', 'burgundy', 'maroon', 'scarlet', 'crimson', 'rust', 'wine'].some(term =>
+      normalized.includes(term)
+    );
+  }
+
+  hasExplicitColor(parsedUserPrompt, selected) {
+    if (parsedUserPrompt?.colors?.length) {
+      return true;
+    }
+
+    if (Array.isArray(selected?.colors) && selected.colors.length > 0) {
+      const firstColor = selected.colors[0]?.name || selected.colors[0];
+      if (firstColor) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   /**
    * Generate default prompt (fallback)
    */
   async generateDefaultPrompt(userId, options) {
     const garmentTypes = ['blazer', 'dress', 'coat', 'skirt', 'pants', 'outfit']; // Added 'outfit'
-    const colors = ['navy', 'black', 'white', 'beige', 'charcoal'];
     const fabrics = ['wool', 'cotton', 'silk', 'linen'];
 
     const garment = options.garmentType || garmentTypes[Math.floor(Math.random() * garmentTypes.length)];
-    const color = colors[Math.floor(Math.random() * colors.length)];
     const fabric = fabrics[Math.floor(Math.random() * fabrics.length)];
 
-    const positive = [
-      this.formatToken('contemporary', 1.4),
-      this.formatToken(`${garment}`, 1.3),
-      this.formatToken(`${fabric}`, 1.2),
-      this.formatToken(`${color}`, 1.3),
-      this.formatToken('three-quarter length shot', 1.3),
-      this.formatToken('model facing camera', 1.3),
-      this.formatToken('front-facing pose', 1.2),
-      this.formatToken('professional fashion photography', 1.3),
-      this.formatToken('studio lighting', 1.1),
-      this.formatToken('3/4 front angle', 1.2),
-      this.formatToken('at eye level', 1.0),
-      this.formatToken('clean studio background', 1.0),
-      this.formatToken('high detail', 1.2),
-      this.formatToken('8k', 1.1),
-      this.formatToken('sharp focus', 1.0)
-    ].join(', ');
+    const mergedGarment = [fabric, garment]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    const fallbackDetails = this.getFallbackDetails(garment).map(({ text, weight }) =>
+      this.formatToken(text, weight)
+    );
+
+    const positiveTokens = [
+      this.formatToken('contemporary style', 1.2),
+      this.formatToken(mergedGarment, 1.3),
+      ...fallbackDetails,
+      this.formatToken('beautiful female model facing camera', 1.3),
+      this.formatToken('full-body shot', 1.8),
+      this.formatToken('standing pose', 1.6),
+      this.formatToken('straight-on, facing camera', 1.3),
+      this.formatToken('soft frontal key light', 1.2),
+      this.formatToken('modern editorial style', 1.1),
+      this.formatToken('neutral background', 1.1),
+      this.formatToken('sharp focus', 1.1)
+    ];
+
+    const positive = this.dedupeAndJoinTokens(positiveTokens);
+
+    const defaultNegativeParts = [
+      this.buildDefaultNegativePrompt(),
+      this.buildFrontAngleNegativePrompt()
+    ];
+
+    if (this.shouldApplyWarmRedNegatives({ parsedUserPrompt: options.parsedUserPrompt || null })) {
+      defaultNegativeParts.push(this.buildWarmRedNegativePrompt());
+    }
+
+    const defaultNegative = defaultNegativeParts.filter(Boolean).join(', ');
 
     const promptRecord = await this.savePrompt(userId, {
       positive_prompt: positive,
-      negative_prompt: this.DEFAULT_NEGATIVE_PROMPT,
+      negative_prompt: defaultNegative,
       metadata: { default: true },
       creativity: options.creativity || 0.5
     });
 
     return {
       positive_prompt: positive,
-      negative_prompt: this.DEFAULT_NEGATIVE_PROMPT,
+      negative_prompt: defaultNegative,
       metadata: { default: true },
       prompt_id: promptRecord.id
     };
@@ -1293,6 +2288,240 @@ class IntelligentPromptBuilder {
    * @param {Object} styleProfile - Enhanced style profile from TrendAnalysisAgent
    * @returns {Object} Brand DNA object
    */
+  extractStylePreferences(styleProfile) {
+    if (!styleProfile) {
+      logger.warn('No style profile provided for preference extraction');
+      return null;
+    }
+
+    try {
+      const parseMaybeJSON = (value, fallback) => {
+        if (value === null || value === undefined) return fallback;
+        if (typeof value === 'string') {
+          const trimmed = value.trim();
+          if (trimmed.length === 0) return fallback;
+          const parsed = this.safeParseJSON(trimmed, undefined);
+          return parsed !== undefined ? parsed : fallback;
+        }
+        return value;
+      };
+
+      const normalizeTheme = (theme, index) => {
+        if (theme === null || theme === undefined) return null;
+        const name = this.normalizeCandidateValue(
+          typeof theme === 'string'
+            ? theme
+            : theme.name || theme.aesthetic || theme.label
+        );
+        if (!name) return null;
+
+        const rawWeight =
+          typeof theme === 'object'
+            ? theme.strength ?? theme.weight ?? theme.count ?? theme.frequency
+            : null;
+        const weight = this.normalizeWeight(rawWeight, Math.max(1 - index * 0.2, 0.3));
+
+        return {
+          name,
+          slug: name.toLowerCase().replace(/\s+/g, '-'),
+          weight,
+          strength: theme?.strength ?? null,
+          description: theme?.description || null,
+          examples: theme?.examples || [],
+          source: 'style-profile'
+        };
+      };
+
+      const toEntryTuples = (value, defaults = {}) => {
+        if (!value) return [];
+        if (Array.isArray(value)) {
+          return value.map(item => {
+            if (typeof item === 'string') {
+              return [item, defaults.weight || 1, null];
+            }
+            if (!item) return [null, null, null];
+            const key =
+              item.name ||
+              item.label ||
+              item.type ||
+              item.fabric ||
+              item.material ||
+              defaults.key ||
+              item;
+            const weight =
+              item.weight ??
+              item.value ??
+              item.count ??
+              item.frequency ??
+              item.percentage ??
+              defaults.weight ??
+              1;
+            return [key, weight, item];
+          });
+        }
+        if (typeof value === 'object') {
+          return Object.entries(value).map(([key, weight]) => [key, weight, null]);
+        }
+        return [];
+      };
+
+      const aestheticThemesRaw = parseMaybeJSON(styleProfile.aesthetic_themes, []);
+      const aestheticThemes = Array.isArray(aestheticThemesRaw)
+        ? aestheticThemesRaw
+            .map((theme, index) => normalizeTheme(theme, index))
+            .filter(Boolean)
+        : [];
+
+      const colorsRaw = parseMaybeJSON(styleProfile.color_distribution, {});
+      const colors = toEntryTuples(colorsRaw)
+        .map(([nameCandidate, weightCandidate, original]) => {
+          const name = this.normalizeCandidateValue(nameCandidate);
+          if (!name) return null;
+          const weight = this.normalizeWeight(weightCandidate, 0.4);
+          return {
+            name,
+            slug: name.toLowerCase().replace(/\s+/g, '-'),
+            weight,
+            hex: original?.hex || this.getColorHex(name),
+            source: original?.source || 'style-profile'
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.weight - a.weight);
+
+      const fabricsRaw = parseMaybeJSON(styleProfile.fabric_distribution, {});
+      const fabrics = toEntryTuples(fabricsRaw)
+        .map(([nameCandidate, weightCandidate, original]) => {
+          const name = this.normalizeCandidateValue(
+            nameCandidate || original?.material
+          );
+          if (!name) return null;
+          const weight = this.normalizeWeight(weightCandidate, 0.4);
+          return {
+            name,
+            slug: name.toLowerCase().replace(/\s+/g, '-'),
+            weight,
+            finish: original?.finish || original?.properties?.texture || null,
+            properties: original?.properties || null,
+            source: original?.source || 'style-profile'
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.weight - a.weight);
+
+      const constructionRaw = parseMaybeJSON(styleProfile.construction_patterns, []);
+      const constructionDetails = Array.isArray(constructionRaw)
+        ? constructionRaw
+            .map((pattern, index) => {
+              if (!pattern) return null;
+              const descriptor = this.normalizeCandidateValue(
+                pattern.name || pattern.detail || pattern.description || pattern
+              );
+              if (!descriptor) return null;
+              const weight = this.normalizeWeight(
+                pattern.frequency ?? pattern.weight ?? pattern.count,
+                Math.max(0.6 - index * 0.1, 0.2)
+              );
+              return {
+                name: descriptor,
+                weight,
+                source: 'style-profile'
+              };
+            })
+            .filter(Boolean)
+        : [];
+
+      const garmentRaw = parseMaybeJSON(styleProfile.garment_distribution, {});
+      const garmentTypes = toEntryTuples(garmentRaw)
+        .map(([nameCandidate, weightCandidate, original]) => {
+          const type = this.normalizeCandidateValue(nameCandidate);
+          if (!type) return null;
+          const weight = this.normalizeWeight(weightCandidate, 0.5);
+          return {
+            type,
+            weight,
+            silhouette: original?.silhouette || null,
+            details: original?.details || [],
+            source: original?.source || 'style-profile'
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.weight - a.weight);
+
+      const silhouetteRaw = parseMaybeJSON(styleProfile.silhouette_distribution, {});
+      const silhouettePreferences = toEntryTuples(silhouetteRaw)
+        .map(([nameCandidate, weightCandidate]) => {
+          const name = this.normalizeCandidateValue(nameCandidate);
+          if (!name) return null;
+          const weight = this.normalizeWeight(weightCandidate, 0.4);
+          return { name, weight };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.weight - a.weight);
+
+      const signaturePiecesRaw = parseMaybeJSON(
+        styleProfile.signature_pieces,
+        styleProfile.signaturePieces || []
+      );
+      const signaturePieces = Array.isArray(signaturePiecesRaw)
+        ? signaturePiecesRaw.map(piece => ({
+            id: piece?.image_id || piece?.id || null,
+            garmentType: piece?.garment_type || piece?.garmentType || null,
+            standoutDetail: piece?.standout_detail || piece?.standoutDetail || null,
+            executiveSummary:
+              piece?.executive_summary?.one_sentence_description ||
+              piece?.executive_summary?.summary ||
+              piece?.description ||
+              null,
+            confidence: piece?.confidence || null
+          }))
+        : [];
+
+      const dominantStylesRaw = parseMaybeJSON(
+        styleProfile.dominant_styles,
+        styleProfile.style_tags || styleProfile.styleTags || []
+      );
+      const tags = Array.isArray(dominantStylesRaw)
+        ? dominantStylesRaw
+            .map(tag =>
+              this.normalizeCandidateValue(
+                typeof tag === 'string' ? tag : tag?.name || tag?.label || tag
+              )
+            )
+            .filter(Boolean)
+        : [];
+
+      const primaryAesthetic = aestheticThemes.length > 0 ? aestheticThemes[0].name : null;
+      const secondaryAesthetics = aestheticThemes.slice(1, 4).map(theme => theme.name);
+
+      return {
+        aestheticThemes,
+        colors,
+        fabrics,
+        constructionDetails,
+        garmentTypes,
+        silhouettePreferences,
+        signaturePieces,
+        tags,
+        primaryAesthetic,
+        secondaryAesthetics,
+        styleDescription: styleProfile.style_description || styleProfile.summary || null,
+        metadata: {
+          totalImages:
+            styleProfile.total_images ||
+            styleProfile.image_count ||
+            styleProfile.totalImages ||
+            null,
+          avgConfidence: styleProfile.avg_confidence || null,
+          updatedAt: styleProfile.updated_at || styleProfile.last_updated || null
+        }
+      };
+    } catch (error) {
+      logger.error('Failed to extract style preferences', { error: error.message });
+      return null;
+    }
+  }
+
   extractBrandDNA(styleProfile) {
     if (!styleProfile) {
       logger.warn('No style profile provided for brand DNA extraction');
@@ -1838,6 +3067,19 @@ class IntelligentPromptBuilder {
     samples.sort((a, b) => b.sample - a.sample);
 
     return samples.slice(0, n).map(s => preferenceDict[s.key].data);
+  }
+
+  /**
+   * Validate UUID strings before using them in parameterized queries.
+   * Prevents errors when development fallbacks pass placeholders like "dev-test".
+   */
+  isValidUUID(value) {
+    if (typeof value !== 'string') {
+      return false;
+    }
+
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(value);
   }
 }
 
