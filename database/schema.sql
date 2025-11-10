@@ -369,13 +369,7 @@ CREATE TABLE IF NOT EXISTS ultra_detailed_descriptors (
         garments->0->'fabric'->>'primary_material'
     ) STORED,
 
-    dominant_colors TEXT[] GENERATED ALWAYS AS (
-        ARRAY(
-            SELECT elem->>'color_name'
-            FROM jsonb_array_elements(garments->0->'color_palette') AS elem
-            WHERE (elem->>'coverage_percentage')::int > 10
-        )
-    ) STORED,
+    dominant_colors TEXT[],  -- Populated by application code
 
     model_ethnicity TEXT GENERATED ALWAYS AS (
         model_demographics->'ethnicity'->>'observed_characteristics'
