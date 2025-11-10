@@ -9,29 +9,13 @@ services:
       - key: NODE_ENV
         value: production
       
-      # Database - Connected to Render Postgres
+      # Database - Connected to Render Postgres (DATABASE_URL contains all connection info)
       - key: DATABASE_URL
         fromDatabase:
           name: anatomie-labs-db
           property: connectionString
       - key: DB_NAME
         value: anatomie_labs
-      - key: DB_HOST
-        fromDatabase:
-          name: anatomie-labs-db
-          property: host
-      - key: DB_PORT
-        fromDatabase:
-          name: anatomie-labs-db
-          property: port
-      - key: DB_USER
-        fromDatabase:
-          name: anatomie-labs-db
-          property: user
-      - key: DB_PASSWORD
-        fromDatabase:
-          name: anatomie-labs-db
-          property: password
       
       # Redis - Connected to Render Redis
       - key: REDIS_URL
@@ -78,7 +62,7 @@ services:
       - key: R2_USE_SIGNED_URLS
         value: "true"
       
-      # OpenAI Configuration
+      # OpenAI Configuration (optional - add in dashboard if needed)
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
@@ -86,7 +70,7 @@ services:
       - key: OPENAI_VISION_MODEL
         value: gpt-4-vision-preview
       
-      # Anthropic Configuration
+      # Anthropic Configuration (optional - add in dashboard if needed)
       - key: ANTHROPIC_API_KEY
         sync: false
       
@@ -102,7 +86,7 @@ services:
       - key: LOG_LEVEL
         value: info
       - key: LOG_FILE
-        value: logs/app.log
+        value: /dev/stdout
       
       # Rate Limiting
       - key: RATE_LIMIT_WINDOW_MS
@@ -118,9 +102,9 @@ services:
       - key: MULTI_USER_COLLABORATION
         value: "true"
       
-      # Client URL - UPDATE THIS WITH YOUR ACTUAL FRONTEND URL
+      # Client URL
       - key: CLIENT_URL
-        value: https://your-frontend-app.onrender.com
+        value: https://anatomie-labs-backend.onrender.com
 
   # Redis Service
   - type: redis
