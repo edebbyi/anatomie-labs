@@ -2,18 +2,31 @@ const { Pool } = require('pg');
 const logger = require('../utils/logger');
 
 // Create PostgreSQL connection pool
-const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'designer_bff',
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD || '',
-  max: 20, // Maximum number of clients in the pool
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000, // Increased from 2000ms to 10000ms
-  query_timeout: 30000, // Add query timeout of 30 seconds
-  statement_timeout: 30000, // Add statement timeout of 30 seconds
-});
+// Prefer DATABASE_URL (Render's format) over individual params (local dev)
+const pool = new Pool(
+  process.env.DATABASE_URL
+    ? {
+        connectionString: process.env.DATABASE_URL,
+        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+        max: 20,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 10000,
+        query_timeout: 30000,
+        statement_timeout: 30000,
+      }
+    : {
+        host: process.env.DB_HOST || 'localhost',
+        port: process.env.DB_PORT || 5432,
+        database: process.env.DB_NAME || 'designer_bff',
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD || '',
+        max: 20,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 10000,
+        query_timeout: 30000,
+        statement_timeout: 30000,
+      }
+);
 
 // Pool error handler
 pool.on('error', (err, client) => {
@@ -110,13 +123,18 @@ const transaction = async (callback) => {
  */
 const testConnection = async () => {
   try {
+    console.log('==> Attempting database connection...');
+    console.log('==> Using DATABASE_URL:', !!process.env.DATABASE_URL);
     const result = await query('SELECT NOW() as time, version() as version');
+    console.log('==> Database query successful!');
     logger.info('Database connection successful', {
       time: result.rows[0].time,
       version: result.rows[0].version.split(',')[0]
     });
     return true;
   } catch (error) {
+    console.error('==> Database connection error:', error.message);
+    console.error('==> Error details:', error);
     logger.error('Database connection failed', { error: error.message });
     return false;
   }
