@@ -311,11 +311,50 @@ app.get('*', (req, res) => {
 
 const PORT = process.env.PORT || 3001;
 
+// Initialize database schema if needed
+const initializeDatabase = async () => {
+  try {
+    console.log('==> Checking database schema...');
+
+    // Check if users table exists
+    const tableCheck = await db.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables
+        WHERE table_schema = 'public'
+        AND table_name = 'users'
+      );
+    `);
+
+    const tableExists = tableCheck.rows[0].exists;
+
+    if (!tableExists) {
+      console.log('⚠️  Users table not found. Initializing database schema...');
+
+      // Read and execute schema.sql
+      const schemaPath = path.join(__dirname, 'database', 'schema.sql');
+      if (!fs.existsSync(schemaPath)) {
+        throw new Error('Schema file not found at: ' + schemaPath);
+      }
+
+      const schemaSQL = fs.readFileSync(schemaPath, 'utf8');
+      await db.query(schemaSQL);
+
+      console.log('✅ Database schema initialized successfully');
+      logger.info('Database schema initialized with all tables');
+    } else {
+      console.log('✓ Database schema already exists');
+    }
+  } catch (error) {
+    console.error('❌ Database initialization error:', error.message);
+    throw error;
+  }
+};
+
 // Initialize database and start server
 const startServer = async () => {
   try {
     console.log('==> Starting server initialization...');
-    
+
     // Test database connection
     console.log('==> Testing database connection...');
     const dbConnected = await db.testConnection();
@@ -328,6 +367,11 @@ const startServer = async () => {
       }
     }
     console.log('✓ Database connection tested');
+
+    // Initialize database schema if needed
+    if (dbConnected) {
+      await initializeDatabase();
+    }
 
     // Connect to Redis
     console.log('==> Connecting to Redis...');
