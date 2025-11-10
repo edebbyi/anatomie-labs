@@ -32,14 +32,31 @@ async function applySchema() {
   console.log('');
 
   try {
-    // Read schema file
-    const schemaPath = path.join(__dirname, '../database/schema.sql');
-    console.log(`Reading schema from: ${schemaPath}`);
+    // Try multiple possible paths for the schema file
+    const possiblePaths = [
+      path.join(__dirname, '../database/schema.sql'),
+      path.join(process.cwd(), 'database/schema.sql'),
+      path.join(process.cwd(), '../database/schema.sql'),
+      '/opt/render/project/src/database/schema.sql',
+    ];
 
-    if (!fs.existsSync(schemaPath)) {
-      console.error('❌ Schema file not found:', schemaPath);
+    let schemaPath = null;
+    for (const testPath of possiblePaths) {
+      if (fs.existsSync(testPath)) {
+        schemaPath = testPath;
+        break;
+      }
+    }
+
+    if (!schemaPath) {
+      console.error('❌ Schema file not found. Tried:');
+      possiblePaths.forEach(p => console.error(`   - ${p}`));
+      console.error('\nCurrent directory:', process.cwd());
+      console.error('Script directory:', __dirname);
       process.exit(1);
     }
+
+    console.log(`Reading schema from: ${schemaPath}`);
 
     const schema = fs.readFileSync(schemaPath, 'utf8');
     console.log('✅ Schema file loaded');
