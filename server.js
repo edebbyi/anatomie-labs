@@ -5,6 +5,77 @@ console.log('==> DATABASE_URL exists:', !!process.env.DATABASE_URL);
 console.log('==> About to require modules...');
 
 const express = require('express');
+console.log('✓ express loaded');
+const cors = require('cors');
+console.log('✓ cors loaded');
+const helmet = require('helmet');
+console.log('✓ helmet loaded');
+const rateLimit = require('express-rate-limit');
+console.log('✓ rateLimit loaded');
+const path = require('path');
+console.log('✓ path loaded');
+const fs = require('fs');
+console.log('✓ fs loaded');
+const http = require('http');
+console.log('✓ http loaded');
+const socketIo = require('socket.io');
+console.log('✓ socketIo loaded');
+require('dotenv').config();
+console.log('✓ dotenv loaded');
+
+// Create logs directory if it doesn't exist
+const logsDir = path.join(__dirname, 'logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+  console.log('✓ logs directory created');
+} else {
+  console.log('✓ logs directory exists');
+}
+
+// Import middleware and routes
+console.log('==> Loading middleware...');
+try {
+  const { authMiddleware } = require('./src/middleware/auth');
+  console.log('✓ auth middleware loaded');
+} catch (e) {
+  console.error('✗ FAILED to load auth middleware:', e.message);
+  process.exit(1);
+}
+
+try {
+  const { errorHandler } = require('./src/middleware/errorHandler');
+  console.log('✓ errorHandler loaded');
+} catch (e) {
+  console.error('✗ FAILED to load errorHandler:', e.message);
+  process.exit(1);
+}
+
+try {
+  const logger = require('./src/utils/logger');
+  console.log('✓ logger loaded');
+} catch (e) {
+  console.error('✗ FAILED to load logger:', e.message);
+  process.exit(1);
+}
+
+console.log('==> Loading database services...');
+try {
+  const db = require('./src/services/database');
+  console.log('✓ database service loaded');
+} catch (e) {
+  console.error('✗ FAILED to load database:', e.message);
+  process.exit(1);
+}
+
+/////////render edits
+
+console.log('==> Starting server.js...');
+console.log('==> Node version:', process.version);
+console.log('==> Environment:', process.env.NODE_ENV);
+console.log('==> DATABASE_URL exists:', !!process.env.DATABASE_URL);
+console.log('==> About to require modules...');
+
+const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
